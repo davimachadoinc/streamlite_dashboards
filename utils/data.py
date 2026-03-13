@@ -541,6 +541,196 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
     return df
 
 
+# ─────────────────────────────────────────────
+# ── PÁGINA 4: INADIMPLÊNCIA ───────────────────
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600)
+def load_inadimplencia_serie() -> pd.DataFrame:
+    """
+    Série histórica de inadimplência por mês de vencimento (últimos 15 meses).
+    Categorias: mensalidade (1.2.2) e setup (1.2.1).
+    Exclui clientes desativados na data da cobrança.
+
+    Colunas retornadas:
+      mes               — mês de vencimento
+      emitido           — total comp_valor emitido no mês
+      aberto            — comp_valor ainda em aberto (fl_status_recb='0') hoje
+                          → "30d sem atrasos": aberto/emitido sem filtro de idade
+      emitido_30d       — emitido com vencimento >= 30 dias atrás
+      aberto_30d        — aberto dentro do emitido_30d
+      emitido_90d       — emitido com vencimento >= 90 dias atrás
+      aberto_90d        — aberto dentro do emitido_90d
+    """
+    query = """
+    WITH cobr AS (
+      SELECT
+        b.st_sincro_sac,
+        DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) AS mes,
+        CAST(b.dt_vencimento_recb AS DATE)                    AS dt_venc,
+        b.fl_status_recb,
+        b.comp_valor
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
+      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+        ON b.st_sincro_sac = c.st_sincro_sac
+      WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
+        AND CAST(b.dt_vencimento_recb AS DATE)
+              >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+        AND CAST(b.dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
+        -- cliente não estava desativado na data da cobrança
+        AND (c.dt_desativacao_sac IS NULL
+             OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
+    )
+    SELECT
+      mes,
+      -- Base sem filtro de idade (30d "sem atrasos")
+      SUM(comp_valor)                                                    AS emitido,
+      SUM(CASE WHEN fl_status_recb = '0' THEN comp_valor ELSE 0 END)    AS aberto,
+      -- Inadimplência 30d: vencidos há >= 30 dias
+      SUM(CASE
+            WHEN DATE_DIFF(CURRENT_DATE(), dt_venc, DAY) >= 30
+            THEN comp_valor ELSE 0 END)                                  AS emitido_30d,
+      SUM(CASE
+            WHEN DATE_DIFF(CURRENT_DATE(), dt_venc, DAY) >= 30
+             AND fl_status_recb = '0'
+            THEN comp_valor ELSE 0 END)                                  AS aberto_30d,
+      -- Inadimplência 90d: vencidos há >= 90 dias
+      SUM(CASE
+            WHEN DATE_DIFF(CURRENT_DATE(), dt_venc, DAY) >= 90
+            THEN comp_valor ELSE 0 END)                                  AS emitido_90d,
+      SUM(CASE
+            WHEN DATE_DIFF(CURRENT_DATE(), dt_venc, DAY) >= 90
+             AND fl_status_recb = '0'
+            THEN comp_valor ELSE 0 END)                                  AS aberto_90d
+    FROM cobr
+    GROUP BY 1
+    ORDER BY 1
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+        for col in ["emitido", "aberto", "emitido_30d", "aberto_30d", "emitido_90d", "aberto_90d"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        df["pct_inadimp"]     = (df["aberto"]    / df["emitido"].replace(0, float("nan")) * 100).round(2)
+        df["pct_inadimp_30d"] = (df["aberto_30d"] / df["emitido_30d"].replace(0, float("nan")) * 100).round(2)
+        df["pct_inadimp_90d"] = (df["aberto_90d"] / df["emitido_90d"].replace(0, float("nan")) * 100).round(2)
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_inadimplencia_por_plano() -> pd.DataFrame:
+    """
+    Inadimplência 30d atual agregada por plano base.
+    Retorna clientes únicos inadimplentes e valor em aberto por plano.
+    """
+    query = f"""
+    SELECT
+      {_PLAN_CASE.format(col="b.comp_st_descricao_prd")}              AS plano,
+      COUNT(DISTINCT b.st_sincro_sac)                                  AS clientes_inadimplentes,
+      SUM(b.comp_valor)                                                AS valor_aberto
+    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
+    LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+      ON b.st_sincro_sac = c.st_sincro_sac
+    WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
+      AND b.fl_status_recb = '0'
+      AND DATE_DIFF(CURRENT_DATE(), CAST(b.dt_vencimento_recb AS DATE), DAY) >= 30
+      AND (c.dt_desativacao_sac IS NULL
+           OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
+      AND {_EXCL_MODULOS.format(col="b.comp_st_descricao_prd")}
+    GROUP BY 1
+    ORDER BY valor_aberto DESC
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["plano"] = df["plano"].str.lower()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_inadimplencia_por_frequencia() -> pd.DataFrame:
+    """
+    Distribuição de clientes inadimplentes (30d) por quantidade de boletos em aberto.
+    Buckets: 1, 2-4, 5-9, 10-14, 15-19, 20+
+    """
+    query = """
+    WITH inadimplentes AS (
+      SELECT
+        b.st_sincro_sac,
+        COUNT(DISTINCT b.id_recebimento_recb) AS boletos_abertos,
+        SUM(b.comp_valor)                      AS valor_aberto
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
+      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+        ON b.st_sincro_sac = c.st_sincro_sac
+      WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
+        AND b.fl_status_recb = '0'
+        AND DATE_DIFF(CURRENT_DATE(), CAST(b.dt_vencimento_recb AS DATE), DAY) >= 30
+        AND (c.dt_desativacao_sac IS NULL
+             OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
+      GROUP BY 1
+    )
+    SELECT
+      CASE
+        WHEN boletos_abertos = 1          THEN '1 boleto'
+        WHEN boletos_abertos BETWEEN 2 AND 4   THEN '2 – 4 boletos'
+        WHEN boletos_abertos BETWEEN 5 AND 9   THEN '5 – 9 boletos'
+        WHEN boletos_abertos BETWEEN 10 AND 14 THEN '10 – 14 boletos'
+        WHEN boletos_abertos BETWEEN 15 AND 19 THEN '15 – 19 boletos'
+        ELSE '20+ boletos'
+      END                              AS faixa,
+      COUNT(*)                         AS clientes,
+      SUM(valor_aberto)                AS valor_aberto
+    FROM inadimplentes
+    GROUP BY 1
+    ORDER BY MIN(boletos_abertos)
+    """
+    df = _bq_query(query, "bigquery_bi")
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_inadimplencia_top_clientes() -> pd.DataFrame:
+    """
+    Top 30 clientes com maior valor em aberto (inadimplência 30d atual).
+    Inclui plano, valor em aberto, boletos abertos e dias máximos de atraso.
+    """
+    query = f"""
+    WITH inad AS (
+      SELECT
+        b.st_sincro_sac,
+        COUNT(DISTINCT b.id_recebimento_recb)                          AS boletos_abertos,
+        SUM(b.comp_valor)                                              AS valor_aberto,
+        MAX(DATE_DIFF(CURRENT_DATE(), CAST(b.dt_vencimento_recb AS DATE), DAY)) AS max_dias_atraso,
+        {_PLAN_CASE.format(col="MAX(b.comp_st_descricao_prd)")}        AS plano
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
+      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+        ON b.st_sincro_sac = c.st_sincro_sac
+      WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
+        AND b.fl_status_recb = '0'
+        AND DATE_DIFF(CURRENT_DATE(), CAST(b.dt_vencimento_recb AS DATE), DAY) >= 30
+        AND (c.dt_desativacao_sac IS NULL
+             OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
+        AND {_EXCL_MODULOS.format(col="b.comp_st_descricao_prd")}
+      GROUP BY 1
+    )
+    SELECT
+      i.st_sincro_sac                  AS id_cliente,
+      c.st_nome_sac                    AS nome_cliente,
+      i.plano,
+      ROUND(i.valor_aberto, 2)         AS valor_aberto,
+      i.boletos_abertos,
+      i.max_dias_atraso
+    FROM inad i
+    LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+      ON i.st_sincro_sac = c.st_sincro_sac
+    ORDER BY i.valor_aberto DESC
+    LIMIT 30
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["plano"] = df["plano"].str.lower()
+    return df
+
+
 @st.cache_data(ttl=3600)
 def load_base_ativa_por_plano() -> pd.DataFrame:
     """
