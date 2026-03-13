@@ -1,7 +1,6 @@
 """
 app.py
 Autenticação nativa Streamlit via Google OIDC (st.login / st.user).
-allowed_emails lido de [app_config] para não conflitar com [auth].
 """
 import streamlit as st
 from utils.style import inject_css
@@ -17,7 +16,6 @@ inject_css()
 
 
 def check_allowed(email: str) -> bool:
-    # Lê de [app_config] — seção separada do [auth] nativo do Streamlit
     allowed = st.secrets.get("app_config", {}).get("allowed_emails", [])
     return email in allowed
 
@@ -41,7 +39,8 @@ if not st.user.is_logged_in:
             """,
             unsafe_allow_html=True,
         )
-        st.button("🔐  Entrar com Google", use_container_width=True, on_click=st.login)
+        if st.button("🔐  Entrar com Google", use_container_width=True):
+            st.login()
     st.stop()
 
 # ── Verifica permissão após login ─────────────
@@ -55,7 +54,8 @@ if not check_allowed(user_email):
             f"❌ O e-mail **{user_email}** não tem permissão de acesso.\n\n"
             "Entre em contato com o administrador."
         )
-        st.button("↩️  Sair", use_container_width=True, on_click=st.logout)
+        if st.button("↩️  Sair", use_container_width=True):
+            st.logout()
     st.stop()
 
 # ── Sidebar ───────────────────────────────────
@@ -66,6 +66,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.divider()
-    st.button("🚪 Sair", use_container_width=True, on_click=st.logout)
+    if st.button("🚪 Sair", use_container_width=True):
+        st.logout()
 
 st.switch_page("pages/1_📊_Cobranca.py")
