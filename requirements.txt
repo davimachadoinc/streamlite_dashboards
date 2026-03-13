@@ -6,3 +6,4 @@ google-cloud-bigquery>=3.11
 google-auth>=2.20
 db-dtypes>=1.1.1
 python-dateutil>=2.8
+streamlit-google-auth>=0.3.0
