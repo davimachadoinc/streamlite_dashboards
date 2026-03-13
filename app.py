@@ -1,7 +1,7 @@
 """
 app.py
-Autenticação nativa do Streamlit via Google OIDC (st.login / st.user).
-Disponível a partir do Streamlit >= 1.41.
+Autenticação nativa Streamlit via Google OIDC (st.login / st.user).
+allowed_emails lido de [app_config] para não conflitar com [auth].
 """
 import streamlit as st
 from utils.style import inject_css
@@ -17,12 +17,13 @@ inject_css()
 
 
 def check_allowed(email: str) -> bool:
-    allowed = st.secrets.get("auth_allowed", {}).get("allowed_emails", [])
+    # Lê de [app_config] — seção separada do [auth] nativo do Streamlit
+    allowed = st.secrets.get("app_config", {}).get("allowed_emails", [])
     return email in allowed
 
 
 # ─────────────────────────────────────────────
-# AUTENTICAÇÃO NATIVA STREAMLIT (OIDC / Google)
+# AUTENTICAÇÃO
 # ─────────────────────────────────────────────
 if not st.user.is_logged_in:
     _, col, _ = st.columns([1, 2, 1])
@@ -40,16 +41,10 @@ if not st.user.is_logged_in:
             """,
             unsafe_allow_html=True,
         )
-        st.markdown(
-            "<p style='text-align:center; color:#a0a0a0; margin-bottom:24px;'>"
-            "Faça login com sua conta Google corporativa.</p>",
-            unsafe_allow_html=True,
-        )
-        if st.button("🔐  Entrar com Google", use_container_width=True):
-            st.login()
+        st.button("🔐  Entrar com Google", use_container_width=True, on_click=st.login)
     st.stop()
 
-# ── Usuário autenticado — verifica permissão ──
+# ── Verifica permissão após login ─────────────
 user_email = st.user.email
 user_name  = getattr(st.user, "name", user_email)
 
@@ -60,8 +55,7 @@ if not check_allowed(user_email):
             f"❌ O e-mail **{user_email}** não tem permissão de acesso.\n\n"
             "Entre em contato com o administrador."
         )
-        if st.button("↩️  Sair", use_container_width=True):
-            st.logout()
+        st.button("↩️  Sair", use_container_width=True, on_click=st.logout)
     st.stop()
 
 # ── Sidebar ───────────────────────────────────
@@ -72,7 +66,6 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.divider()
-    if st.button("🚪 Sair", use_container_width=True):
-        st.logout()
+    st.button("🚪 Sair", use_container_width=True, on_click=st.logout)
 
 st.switch_page("pages/1_📊_Cobranca.py")
