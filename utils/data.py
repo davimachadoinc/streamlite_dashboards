@@ -43,9 +43,6 @@ MODULE_COLORS = {
     "base":             "#4c4c4c",
 }
 
-# Métodos de pagamento excluídos dos gráficos de transação
-METHODS_EXCLUDED = ('free', 'external', 'debit')
-
 
 # ─────────────────────────────────────────────
 # LAYOUT PADRÃO DE GRÁFICOS
@@ -66,8 +63,14 @@ def chart_layout(fig: go.Figure, height: int = 380, legend_bottom: bool = False)
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Outfit, sans-serif", color="#ffffff", size=13),
         legend=legend_cfg,
-        xaxis=dict(showgrid=True, gridcolor="#292929", gridwidth=1, zeroline=False, title="", type="category"),
-        yaxis=dict(showgrid=True, gridcolor="#292929", gridwidth=1, zeroline=False, title=""),
+        xaxis=dict(
+            showgrid=True, gridcolor="#292929", gridwidth=1,
+            zeroline=False, title="", type="category",
+        ),
+        yaxis=dict(
+            showgrid=True, gridcolor="#292929", gridwidth=1,
+            zeroline=False, title="",
+        ),
         hoverlabel=dict(
             bgcolor="#141414", bordercolor="#292929",
             font_size=13, font_family="Outfit, sans-serif", font_color="#ffffff",
@@ -78,13 +81,13 @@ def chart_layout(fig: go.Figure, height: int = 380, legend_bottom: bool = False)
 
 def mes_fmt_ordered(df: pd.DataFrame, date_col: str = "mes") -> tuple[pd.DataFrame, list[str]]:
     """
-    Adiciona coluna mes_fmt (MMM/YY) e retorna o df + lista ordenada cronologicamente.
-    Usar como categoryorder no eixo X para garantir ordem correta.
+    Adiciona coluna mes_fmt (Mmm/YY) e retorna df ordenado + lista cronológica.
+    Usar categoryarray no Plotly para garantir ordem correta no eixo X.
     """
     df = df.copy()
     df[date_col] = pd.to_datetime(df[date_col])
     df = df.sort_values(date_col)
-    df["mes_fmt"] = df[date_col].dt.strftime("%b/%y").str.lower().str.capitalize()
+    df["mes_fmt"] = df[date_col].dt.strftime("%b/%y").str.capitalize()
     ordered = df["mes_fmt"].drop_duplicates().tolist()
     return df, ordered
 
@@ -190,7 +193,10 @@ def _bq_query(query: str, project_key: str = "bigquery_tech") -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def load_contratos_mensais() -> pd.DataFrame:
-    """Clientes únicos com boleto emitido por mês + receita total."""
+    """
+    Clientes únicos com boleto emitido por mês + totais de receita.
+    Deduplicação por id_recebimento_recb via ROW_NUMBER.
+    """
     query = """
     WITH dedup AS (
       SELECT
@@ -209,10 +215,10 @@ def load_contratos_mensais() -> pd.DataFrame:
     )
     SELECT
       mes,
-      COUNT(DISTINCT st_sincro_sac)  AS clientes_com_boleto,
-      COUNT(id_recebimento_recb)     AS total_boletos,
-      SUM(vl_total_recb)             AS receita_total,
-      SUM(CASE WHEN fl_status_recb = '1' THEN vl_total_recb ELSE 0 END) AS receita_liquidada
+      COUNT(DISTINCT st_sincro_sac)                                          AS clientes_com_boleto,
+      COUNT(id_recebimento_recb)                                             AS total_boletos,
+      SUM(vl_total_recb)                                                     AS receita_total,
+      SUM(CASE WHEN fl_status_recb = '1' THEN vl_total_recb ELSE 0 END)     AS receita_liquidada
     FROM dedup
     WHERE rn = 1
     GROUP BY mes
@@ -227,124 +233,78 @@ def load_contratos_mensais() -> pd.DataFrame:
 @st.cache_data(ttl=3600)
 def load_modulos_mensais() -> pd.DataFrame:
     """
-    Clientes com módulo ativo (identificado via st_descricao_prd no MRR)
-    que tiveram boleto emitido no mês.
-    Módulos: [KIDS], [JORNADA], [LOJAINTELIGENTE] ou [LOJAINTELIGENTE_INC].
+    Clientes únicos com cobrança emitida por módulo por mês.
+    Identifica módulo via comp_st_descricao_prd diretamente na tabela de cobranças
+    (mesmo padrão [KIDS], [JORNADA], [LOJAINTELIGENTE], [LOJAINTELIGENTE_INC]).
+    Conta st_sincro_sac distintos que tiveram ao menos 1 linha do módulo no mês.
     """
-    # Boletos por cliente/mês — bigquery_bi
-    query_boletos = """
+    query = """
     SELECT
       DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH) AS mes,
-      st_sincro_sac
-    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
-    WHERE CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
-      AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
-    GROUP BY 1, 2
-    """
-
-    # Módulo ativo por cliente via MRR — bigquery_bi
-    query_mrr = """
-    SELECT DISTINCT
-      st_sincro_sac,
       CASE
-        WHEN st_descricao_prd LIKE '%[KIDS]%'                THEN 'kids'
-        WHEN st_descricao_prd LIKE '%[JORNADA]%'             THEN 'jornada'
-        WHEN st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'     THEN 'loja_inteligente'
-        WHEN st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%' THEN 'loja_inteligente'
-      END AS modulo
-    FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
-    WHERE
-      CAST(dt_inicio_mens AS DATE) <= CURRENT_DATE()
-      AND (dt_fim_mens IS NULL OR CAST(dt_fim_mens AS DATE) > CURRENT_DATE())
+        WHEN comp_st_descricao_prd LIKE '%[KIDS]%'                THEN 'kids'
+        WHEN comp_st_descricao_prd LIKE '%[JORNADA]%'             THEN 'jornada'
+        WHEN comp_st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'     THEN 'loja_inteligente'
+        WHEN comp_st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%' THEN 'loja_inteligente'
+      END AS modulo,
+      COUNT(DISTINCT st_sincro_sac) AS clientes
+    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+    WHERE comp_st_conta_cont = '1.2.2'
+      AND CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
       AND (
-        st_descricao_prd LIKE '%[KIDS]%'
-        OR st_descricao_prd LIKE '%[JORNADA]%'
-        OR st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'
-        OR st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%'
+        comp_st_descricao_prd LIKE '%[KIDS]%'
+        OR comp_st_descricao_prd LIKE '%[JORNADA]%'
+        OR comp_st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'
+        OR comp_st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%'
       )
+    GROUP BY 1, 2
+    ORDER BY 1, 2
     """
-
-    df_boletos = _bq_query(query_boletos, "bigquery_bi")
-    df_mrr     = _bq_query(query_mrr,     "bigquery_bi")
-
-    if df_boletos.empty or df_mrr.empty:
-        return pd.DataFrame(columns=["mes", "modulo", "clientes"])
-
-    df_boletos["mes"]          = pd.to_datetime(df_boletos["mes"])
-    df_boletos["st_sincro_sac"] = df_boletos["st_sincro_sac"].astype(str)
-    df_mrr["st_sincro_sac"]    = df_mrr["st_sincro_sac"].astype(str)
-    df_mrr = df_mrr[df_mrr["modulo"].notna()]
-
-    merged = df_boletos.merge(df_mrr, on="st_sincro_sac", how="inner")
-    result = (
-        merged.groupby(["mes", "modulo"], as_index=False)
-        ["st_sincro_sac"].nunique()
-        .rename(columns={"st_sincro_sac": "clientes"})
-    )
-    return result
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+        df["modulo"] = df["modulo"].str.lower()
+    return df
 
 
 @st.cache_data(ttl=3600)
 def load_receita_modulos_mensais() -> pd.DataFrame:
     """
-    Receita por módulo por mês usando comp_valor (não vl_total_recb).
-    Filtra comp_st_conta_cont = '1.2.2' (Mensalidade) para isolar receita de módulo.
-    Identifica módulo via MRR (st_descricao_prd).
+    Receita por módulo por mês usando comp_valor diretamente na tabela de cobranças.
+    Filtra comp_st_conta_cont = '1.2.2' e identifica módulo via comp_st_descricao_prd.
+    Isso garante que somente o valor do item Kids/Jornada/Loja entra na soma,
+    sem contaminar com plano base, PRO, FILHA ou outros módulos do mesmo boleto.
     """
-    # comp_valor de mensalidade por cliente/mês
-    query_receita = """
+    query = """
     SELECT
       DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH) AS mes,
-      st_sincro_sac,
-      SUM(comp_valor)                                      AS receita_emitida,
-      SUM(CASE WHEN fl_status_recb = '1' THEN comp_valor ELSE 0 END) AS receita_liquidada
-    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
-    WHERE CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
-      AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
-      AND comp_st_conta_cont = '1.2.2'
-    GROUP BY 1, 2
-    """
-
-    # Módulo ativo por cliente via MRR
-    query_mrr = """
-    SELECT DISTINCT
-      st_sincro_sac,
       CASE
-        WHEN st_descricao_prd LIKE '%[KIDS]%'                THEN 'kids'
-        WHEN st_descricao_prd LIKE '%[JORNADA]%'             THEN 'jornada'
-        WHEN st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'     THEN 'loja_inteligente'
-        WHEN st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%' THEN 'loja_inteligente'
-      END AS modulo
-    FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
-    WHERE
-      CAST(dt_inicio_mens AS DATE) <= CURRENT_DATE()
-      AND (dt_fim_mens IS NULL OR CAST(dt_fim_mens AS DATE) > CURRENT_DATE())
+        WHEN comp_st_descricao_prd LIKE '%[KIDS]%'                THEN 'kids'
+        WHEN comp_st_descricao_prd LIKE '%[JORNADA]%'             THEN 'jornada'
+        WHEN comp_st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'     THEN 'loja_inteligente'
+        WHEN comp_st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%' THEN 'loja_inteligente'
+      END AS modulo,
+      SUM(comp_valor)                                                    AS receita_emitida,
+      SUM(CASE WHEN fl_status_recb = '1' THEN comp_valor ELSE 0 END)    AS receita_liquidada
+    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+    WHERE comp_st_conta_cont = '1.2.2'
+      AND CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
       AND (
-        st_descricao_prd LIKE '%[KIDS]%'
-        OR st_descricao_prd LIKE '%[JORNADA]%'
-        OR st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'
-        OR st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%'
+        comp_st_descricao_prd LIKE '%[KIDS]%'
+        OR comp_st_descricao_prd LIKE '%[JORNADA]%'
+        OR comp_st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'
+        OR comp_st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%'
       )
+    GROUP BY 1, 2
+    ORDER BY 1, 2
     """
-
-    df_receita = _bq_query(query_receita, "bigquery_bi")
-    df_mrr     = _bq_query(query_mrr,     "bigquery_bi")
-
-    if df_receita.empty or df_mrr.empty:
-        return pd.DataFrame(columns=["mes", "modulo", "receita_emitida", "receita_liquidada"])
-
-    df_receita["mes"]          = pd.to_datetime(df_receita["mes"])
-    df_receita["st_sincro_sac"] = df_receita["st_sincro_sac"].astype(str)
-    df_mrr["st_sincro_sac"]    = df_mrr["st_sincro_sac"].astype(str)
-    df_mrr = df_mrr[df_mrr["modulo"].notna()]
-
-    merged = df_receita.merge(df_mrr, on="st_sincro_sac", how="inner")
-    result = (
-        merged.groupby(["mes", "modulo"], as_index=False)
-        .agg(receita_emitida=("receita_emitida", "sum"),
-             receita_liquidada=("receita_liquidada", "sum"))
-    )
-    return result
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+        df["modulo"] = df["modulo"].str.lower()
+    return df
 
 
 # ─────────────────────────────────────────────
@@ -355,8 +315,8 @@ def load_receita_modulos_mensais() -> pd.DataFrame:
 def load_transactions_por_metodo() -> pd.DataFrame:
     """
     Soma de value por método de pagamento e mês (últimos 15 meses).
-    Filtra status IN ('active', 'payed').
-    Exclui métodos: free, external, debit.
+    Status: active ou payed.
+    Métodos excluídos: free (valor zero), external (valor zero), debit (volume residual).
     """
     query = """
     SELECT
