@@ -6,11 +6,12 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 
-if not st.session_state.get("authenticated"):
+st.set_page_config(page_title="Cobrança | InChurch", page_icon="📊", layout="wide")
+
+if not st.user.is_logged_in:
     st.error("⛔ Acesso não autorizado. Faça login na página inicial.")
     st.stop()
 
-st.set_page_config(page_title="Cobrança | InChurch", page_icon="📊", layout="wide")
 st.session_state["_page_key"] = "cobranca"
 
 from utils.style import inject_css
