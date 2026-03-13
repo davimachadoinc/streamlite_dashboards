@@ -1,15 +1,17 @@
 """
 utils/data.py
 Helpers de dados, cache, paleta de cores e layout de gráficos.
-Todas as queries BigQuery e funções de transformação ficam aqui.
 """
 from __future__ import annotations
 
+import json
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from datetime import date
 from dateutil.relativedelta import relativedelta
+from google.oauth2 import service_account
+from google.cloud import bigquery
 
 # ─────────────────────────────────────────────
 # PALETA & TEMPLATE
@@ -28,19 +30,17 @@ PALETTE = [
 ]
 CHART_TEMPLATE = "plotly_dark"
 
-# Mapeamento de módulos para nomes amigáveis
 MODULE_LABELS = {
-    "kids":            "Kids",
-    "jornada":         "Jornada",
+    "kids":             "Kids",
+    "jornada":          "Jornada",
     "loja_inteligente": "Loja Inteligente",
 }
 
-# Cores dedicadas por módulo (para consistência entre gráficos)
 MODULE_COLORS = {
-    "kids":            "#6eda2c",
-    "jornada":         "#ffffff",
+    "kids":             "#6eda2c",
+    "jornada":          "#ffffff",
     "loja_inteligente": "#a0a0a0",
-    "base":            "#4c4c4c",
+    "base":             "#4c4c4c",
 }
 
 
@@ -48,7 +48,6 @@ MODULE_COLORS = {
 # LAYOUT PADRÃO DE GRÁFICOS
 # ─────────────────────────────────────────────
 def chart_layout(fig: go.Figure, height: int = 380, legend_bottom: bool = False) -> go.Figure:
-    """Aplicar estilo padrão InChurch em todos os gráficos Plotly."""
     legend_cfg = dict(
         bgcolor="rgba(0,0,0,0)",
         font=dict(family="Outfit", size=12, color="#a0a0a0"),
@@ -64,14 +63,8 @@ def chart_layout(fig: go.Figure, height: int = 380, legend_bottom: bool = False)
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Outfit, sans-serif", color="#ffffff", size=13),
         legend=legend_cfg,
-        xaxis=dict(
-            showgrid=True, gridcolor="#292929", gridwidth=1,
-            zeroline=False, title="",
-        ),
-        yaxis=dict(
-            showgrid=True, gridcolor="#292929", gridwidth=1,
-            zeroline=False, title="",
-        ),
+        xaxis=dict(showgrid=True, gridcolor="#292929", gridwidth=1, zeroline=False, title=""),
+        yaxis=dict(showgrid=True, gridcolor="#292929", gridwidth=1, zeroline=False, title=""),
         hoverlabel=dict(
             bgcolor="#141414", bordercolor="#292929",
             font_size=13, font_family="Outfit, sans-serif", font_color="#ffffff",
@@ -84,10 +77,6 @@ def chart_layout(fig: go.Figure, height: int = 380, legend_bottom: bool = False)
 # SELETORES DE PERÍODO
 # ─────────────────────────────────────────────
 def period_selector() -> int:
-    """
-    Renderiza seletor de número de meses (sidebar).
-    Retorna n_months (int). 0 = todos os dados.
-    """
     with st.sidebar:
         st.markdown("### 🗓️ Período")
         n = st.selectbox(
@@ -101,10 +90,6 @@ def period_selector() -> int:
 
 
 def filter_months(df: pd.DataFrame, n_months: int, date_col: str = "mes") -> pd.DataFrame:
-    """
-    Filtra o DataFrame para os últimos n_months meses a partir de hoje.
-    n_months=0 retorna tudo.
-    """
     if df.empty or n_months == 0:
         return df
     cutoff = date.today() - relativedelta(months=n_months)
@@ -119,7 +104,6 @@ def filter_months(df: pd.DataFrame, n_months: int, date_col: str = "mes") -> pd.
 # HELPERS DE KPI
 # ─────────────────────────────────────────────
 def last_val(df: pd.DataFrame, col: str, date_col: str = "mes"):
-    """Último valor de uma série ordenada por data."""
     if df.empty or col not in df.columns:
         return None
     ordered = df.sort_values(date_col)
@@ -127,7 +111,6 @@ def last_val(df: pd.DataFrame, col: str, date_col: str = "mes"):
 
 
 def prev_val(df: pd.DataFrame, col: str, date_col: str = "mes"):
-    """Penúltimo valor (para cálculo de delta)."""
     if df.empty or col not in df.columns:
         return None
     ordered = df.sort_values(date_col)
@@ -135,7 +118,6 @@ def prev_val(df: pd.DataFrame, col: str, date_col: str = "mes"):
 
 
 def delta_str(curr, prev, fmt: str = "+,.0f", suffix: str = "") -> str | None:
-    """Formata delta como string. Retorna None se dados insuficientes."""
     if curr is None or prev is None:
         return None
     diff = curr - prev
@@ -150,23 +132,13 @@ def no_data(label: str = "Dados não disponíveis") -> None:
 
 
 # ─────────────────────────────────────────────
-# CONEXÃO BIGQUERY
+# CONEXÃO BIGQUERY — cliente nativo
 # ─────────────────────────────────────────────
-import json
-from google.oauth2 import service_account
-from google.cloud import bigquery
-
 def _get_bq_client(project_key: str) -> bigquery.Client:
-    """
-    Cria um cliente BigQuery autenticado via service account
-    armazenada nos secrets do Streamlit.
-    project_key: chave dentro de st.secrets["connections"] (ex: "bigquery_tech")
-    """
     cfg = st.secrets["connections"][project_key]
     project = cfg["project"]
     creds_raw = cfg["credentials"]
 
-    # credentials pode ser string JSON ou dict (toml já parseia dicts)
     if isinstance(creds_raw, str):
         creds_dict = json.loads(creds_raw)
     else:
@@ -207,13 +179,13 @@ def _bq_query(query: str, project_key: str = "bigquery_tech") -> pd.DataFrame:
 def load_contratos_mensais() -> pd.DataFrame:
     """
     Clientes únicos com boleto emitido por mês (últimos 15 meses).
-    Deduplicação por id_recebimento_recb via ROW_NUMBER.
+    FIX: CAST explícito de DATE para TIMESTAMP na comparação.
     """
     query = """
     WITH dedup AS (
       SELECT
         st_sincro_sac,
-        DATE_TRUNC(dt_vencimento_recb, MONTH) AS mes,
+        DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH) AS mes,
         id_recebimento_recb,
         vl_total_recb,
         fl_status_recb,
@@ -223,19 +195,20 @@ def load_contratos_mensais() -> pd.DataFrame:
           ORDER BY dt_vencimento_recb
         ) AS rn
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
-      WHERE dt_vencimento_recb >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 15 MONTH), MONTH)
+      WHERE CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
     )
     SELECT
       mes,
-      COUNT(DISTINCT st_sincro_sac) AS clientes_com_boleto,
-      COUNT(id_recebimento_recb)    AS total_boletos,
-      SUM(vl_total_recb)            AS receita_total,
+      COUNT(DISTINCT st_sincro_sac)  AS clientes_com_boleto,
+      COUNT(id_recebimento_recb)     AS total_boletos,
+      SUM(vl_total_recb)             AS receita_total,
       SUM(CASE WHEN fl_status_recb = '1' THEN vl_total_recb ELSE 0 END) AS receita_liquidada
     FROM dedup
     WHERE rn = 1
     GROUP BY mes
     ORDER BY mes
     """
+    # Tabela é do BQ_BI → usar cliente bigquery_bi
     df = _bq_query(query, "bigquery_bi")
     if not df.empty:
         df["mes"] = pd.to_datetime(df["mes"])
@@ -245,89 +218,106 @@ def load_contratos_mensais() -> pd.DataFrame:
 @st.cache_data(ttl=3600)
 def load_modulos_mensais() -> pd.DataFrame:
     """
-    Contagem de clientes ativos com boleto emitido + módulo contratado,
-    por mês (kids, jornada, loja_inteligente).
+    Clientes com módulo ativo + boleto emitido no mês.
+    FIX: cada base consultada pelo cliente correto via UNION após joins separados.
+    Como o join é cross-project, rodamos a query no projeto que tem as duas tabelas
+    acessíveis pela service account (bigquery_bi tem acesso ao BQ_TECH via federation
+    ou fazemos duas queries separadas e juntamos no Python).
     """
-    query = """
-    WITH periodos AS (
-      SELECT
-        DATE_TRUNC(dt_vencimento_recb, MONTH) AS mes,
-        st_sincro_sac
-      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
-      WHERE dt_vencimento_recb >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 15 MONTH), MONTH)
-      GROUP BY 1, 2
-    ),
-    features AS (
-      SELECT
-        CAST(tertiarygroup_id AS STRING) AS st_sincro_sac,
-        feature_alias
-      FROM `inchurch-gcp.backend_bi.view_feature_subscription`
-      WHERE LOWER(feature_alias) IN ('kids', 'jornada', 'loja_inteligente')
-    )
+    # Query 1: clientes com boleto por mês — roda no bigquery_bi
+    query_boletos = """
     SELECT
-      p.mes,
-      f.feature_alias                     AS modulo,
-      COUNT(DISTINCT p.st_sincro_sac)     AS clientes
-    FROM periodos p
-    JOIN features f ON p.st_sincro_sac = f.st_sincro_sac
+      DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH) AS mes,
+      st_sincro_sac
+    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+    WHERE CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
     GROUP BY 1, 2
-    ORDER BY 1, 2
     """
-    df = _bq_query(query, "bigquery_tech")
-    if not df.empty:
-        df["mes"] = pd.to_datetime(df["mes"])
-        df["modulo"] = df["modulo"].str.lower()
-    return df
+
+    # Query 2: features por cliente — roda no bigquery_tech
+    query_features = """
+    SELECT
+      CAST(tertiarygroup_id AS STRING) AS st_sincro_sac,
+      LOWER(feature_alias)             AS modulo
+    FROM `inchurch-gcp.backend_bi.view_feature_subscription`
+    WHERE LOWER(feature_alias) IN ('kids', 'jornada', 'loja_inteligente')
+    """
+
+    df_boletos  = _bq_query(query_boletos,  "bigquery_bi")
+    df_features = _bq_query(query_features, "bigquery_tech")
+
+    if df_boletos.empty or df_features.empty:
+        return pd.DataFrame(columns=["mes", "modulo", "clientes"])
+
+    df_boletos["mes"] = pd.to_datetime(df_boletos["mes"])
+    df_boletos["st_sincro_sac"]  = df_boletos["st_sincro_sac"].astype(str)
+    df_features["st_sincro_sac"] = df_features["st_sincro_sac"].astype(str)
+
+    merged = df_boletos.merge(df_features, on="st_sincro_sac", how="inner")
+    result = (
+        merged.groupby(["mes", "modulo"], as_index=False)
+        ["st_sincro_sac"].nunique()
+        .rename(columns={"st_sincro_sac": "clientes"})
+    )
+    return result
 
 
 @st.cache_data(ttl=3600)
 def load_receita_modulos_mensais() -> pd.DataFrame:
     """
-    Soma de receita por módulo (kids, jornada, loja_inteligente) por mês,
-    com flag de liquidação. Usa st_descricao_prd para identificar o módulo
-    no MRR, cruzado com clientes que têm boleto emitido no mês.
+    Receita por módulo por mês.
+    Identifica módulo via MRR (st_descricao_prd) e cruza com boletos emitidos.
+    Duas queries separadas + merge no Python (cross-project).
     """
-    query = """
-    WITH boletos AS (
-      SELECT
-        DATE_TRUNC(dt_vencimento_recb, MONTH) AS mes,
-        st_sincro_sac,
-        SUM(vl_total_recb)                    AS receita_emitida,
-        SUM(CASE WHEN fl_status_recb = '1' THEN vl_total_recb ELSE 0 END) AS receita_liquidada
-      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
-      WHERE dt_vencimento_recb >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 15 MONTH), MONTH)
-      GROUP BY 1, 2
-    ),
-    mrr AS (
-      SELECT
-        st_sincro_sac,
-        CASE
-          WHEN LOWER(st_descricao_prd) LIKE '%[kids]%'             THEN 'kids'
-          WHEN LOWER(st_descricao_prd) LIKE '%[jornada]%'          THEN 'jornada'
-          WHEN LOWER(st_descricao_prd) LIKE '%[loja_inteligente]%' THEN 'loja_inteligente'
-          ELSE NULL
-        END AS modulo
-      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
-      WHERE
-        dt_inicio_mens <= CURRENT_TIMESTAMP()
-        AND (dt_fim_mens IS NULL OR dt_fim_mens > CURRENT_TIMESTAMP())
-    )
+    # Query 1: receita por cliente/mês — bigquery_bi
+    query_receita = """
     SELECT
-      b.mes,
-      m.modulo,
-      SUM(b.receita_emitida)    AS receita_emitida,
-      SUM(b.receita_liquidada)  AS receita_liquidada
-    FROM boletos b
-    JOIN mrr m ON b.st_sincro_sac = m.st_sincro_sac
-    WHERE m.modulo IS NOT NULL
+      DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH) AS mes,
+      st_sincro_sac,
+      SUM(vl_total_recb)                                  AS receita_emitida,
+      SUM(CASE WHEN fl_status_recb = '1' THEN vl_total_recb ELSE 0 END) AS receita_liquidada
+    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+    WHERE CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
     GROUP BY 1, 2
-    ORDER BY 1, 2
     """
-    df = _bq_query(query, "bigquery_bi")
-    if not df.empty:
-        df["mes"] = pd.to_datetime(df["mes"])
-        df["modulo"] = df["modulo"].str.lower()
-    return df
+
+    # Query 2: módulo ativo por cliente via MRR — bigquery_bi
+    query_mrr = """
+    SELECT
+      st_sincro_sac,
+      CASE
+        WHEN LOWER(st_descricao_prd) LIKE '%[kids]%'              THEN 'kids'
+        WHEN LOWER(st_descricao_prd) LIKE '%[jornada]%'           THEN 'jornada'
+        WHEN LOWER(st_descricao_prd) LIKE '%[loja_inteligente]%'  THEN 'loja_inteligente'
+        ELSE NULL
+      END AS modulo
+    FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+    WHERE
+      CAST(dt_inicio_mens AS DATE) <= CURRENT_DATE()
+      AND (dt_fim_mens IS NULL OR CAST(dt_fim_mens AS DATE) > CURRENT_DATE())
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY st_sincro_sac, CASE
+        WHEN LOWER(st_descricao_prd) LIKE '%[kids]%'             THEN 'kids'
+        WHEN LOWER(st_descricao_prd) LIKE '%[jornada]%'          THEN 'jornada'
+        WHEN LOWER(st_descricao_prd) LIKE '%[loja_inteligente]%' THEN 'loja_inteligente'
+        ELSE NULL END ORDER BY dt_inicio_mens DESC) = 1
+    """
+
+    df_receita = _bq_query(query_receita, "bigquery_bi")
+    df_mrr     = _bq_query(query_mrr,     "bigquery_bi")
+
+    if df_receita.empty or df_mrr.empty:
+        return pd.DataFrame(columns=["mes", "modulo", "receita_emitida", "receita_liquidada"])
+
+    df_receita["mes"] = pd.to_datetime(df_receita["mes"])
+    df_mrr = df_mrr[df_mrr["modulo"].notna()]
+
+    merged = df_receita.merge(df_mrr, on="st_sincro_sac", how="inner")
+    result = (
+        merged.groupby(["mes", "modulo"], as_index=False)
+        .agg(receita_emitida=("receita_emitida", "sum"),
+             receita_liquidada=("receita_liquidada", "sum"))
+    )
+    return result
 
 
 # ─────────────────────────────────────────────
@@ -339,26 +329,25 @@ def load_transactions_por_metodo() -> pd.DataFrame:
     """
     Soma de value por método de pagamento e mês (últimos 15 meses).
     Filtra status IN ('active', 'payed').
-    Inclui payment_channel para filtro no frontend.
+    FIX: CAST explícito de TIMESTAMP para DATE na comparação.
     """
     query = """
     SELECT
-      DATE_TRUNC(CAST(datetime AS DATE), MONTH)  AS mes,
+      DATE_TRUNC(CAST(datetime AS DATE), MONTH) AS mes,
       payment_method,
       payment_channel,
-      SUM(value)                                  AS total_value,
-      COUNT(*)                                    AS qtd_transacoes
+      SUM(value)                                AS total_value,
+      COUNT(*)                                  AS qtd_transacoes
     FROM `inchurch-gcp.backend_bi.view_transaction`
     WHERE
       status IN ('active', 'payed')
-      AND datetime >= TIMESTAMP(DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 15 MONTH), MONTH))
+      AND CAST(datetime AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
     GROUP BY 1, 2, 3
     ORDER BY 1, 2
     """
     df = _bq_query(query, "bigquery_tech")
     if not df.empty:
-        df["mes"] = pd.to_datetime(df["mes"])
-        # Tratar nulos
+        df["mes"]            = pd.to_datetime(df["mes"])
         df["payment_method"]  = df["payment_method"].fillna("Não informado")
         df["payment_channel"] = df["payment_channel"].fillna("Não informado")
     return df
