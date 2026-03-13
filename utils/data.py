@@ -152,11 +152,48 @@ def no_data(label: str = "Dados não disponíveis") -> None:
 # ─────────────────────────────────────────────
 # CONEXÃO BIGQUERY
 # ─────────────────────────────────────────────
+import json
+from google.oauth2 import service_account
+from google.cloud import bigquery
+
+def _get_bq_client(project_key: str) -> bigquery.Client:
+    """
+    Cria um cliente BigQuery autenticado via service account
+    armazenada nos secrets do Streamlit.
+    project_key: chave dentro de st.secrets["connections"] (ex: "bigquery_tech")
+    """
+    cfg = st.secrets["connections"][project_key]
+    project = cfg["project"]
+    creds_raw = cfg["credentials"]
+
+    # credentials pode ser string JSON ou dict (toml já parseia dicts)
+    if isinstance(creds_raw, str):
+        creds_dict = json.loads(creds_raw)
+    else:
+        creds_dict = dict(creds_raw)
+
+    credentials = service_account.Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/bigquery"],
+    )
+    return bigquery.Client(project=project, credentials=credentials)
+
+
+@st.cache_resource
+def _bq_client_tech() -> bigquery.Client:
+    return _get_bq_client("bigquery_tech")
+
+
+@st.cache_resource
+def _bq_client_bi() -> bigquery.Client:
+    return _get_bq_client("bigquery_bi")
+
+
 def _bq_query(query: str, project_key: str = "bigquery_tech") -> pd.DataFrame:
-    """Executa query no BigQuery usando st.connection."""
+    """Executa query no BigQuery usando cliente nativo."""
     try:
-        conn = st.connection(project_key, type="sql")
-        return conn.query(query, ttl=3600)
+        client = _bq_client_tech() if project_key == "bigquery_tech" else _bq_client_bi()
+        return client.query(query).to_dataframe()
     except Exception as e:
         st.error(f"Erro ao consultar BigQuery ({project_key}): {e}")
         return pd.DataFrame()
