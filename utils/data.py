@@ -196,6 +196,7 @@ def load_contratos_mensais() -> pd.DataFrame:
         ) AS rn
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
       WHERE CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+        AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
     )
     SELECT
       mes,
@@ -231,6 +232,7 @@ def load_modulos_mensais() -> pd.DataFrame:
       st_sincro_sac
     FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
     WHERE CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
     GROUP BY 1, 2
     """
 
@@ -278,6 +280,7 @@ def load_receita_modulos_mensais() -> pd.DataFrame:
       SUM(CASE WHEN fl_status_recb = '1' THEN vl_total_recb ELSE 0 END) AS receita_liquidada
     FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
     WHERE CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
     GROUP BY 1, 2
     """
 
@@ -334,7 +337,7 @@ def load_transactions_por_metodo() -> pd.DataFrame:
     query = """
     SELECT
       DATE_TRUNC(CAST(datetime AS DATE), MONTH) AS mes,
-      payment_method,
+      method                                    AS payment_method,
       payment_channel,
       SUM(value)                                AS total_value,
       COUNT(*)                                  AS qtd_transacoes
@@ -342,12 +345,13 @@ def load_transactions_por_metodo() -> pd.DataFrame:
     WHERE
       status IN ('active', 'payed')
       AND CAST(datetime AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(datetime AS DATE) <= LAST_DAY(CURRENT_DATE())
     GROUP BY 1, 2, 3
     ORDER BY 1, 2
     """
     df = _bq_query(query, "bigquery_tech")
     if not df.empty:
-        df["mes"]            = pd.to_datetime(df["mes"])
+        df["mes"]             = pd.to_datetime(df["mes"])
         df["payment_method"]  = df["payment_method"].fillna("Não informado")
         df["payment_channel"] = df["payment_channel"].fillna("Não informado")
     return df
