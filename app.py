@@ -21,7 +21,7 @@ def check_allowed(email: str) -> bool:
 
 
 # ─────────────────────────────────────────────
-# AUTENTICAÇÃO
+# AUTENTICAÇÃO via Google OIDC
 # ─────────────────────────────────────────────
 if not st.user.is_logged_in:
     _, col, _ = st.columns([1, 2, 1])

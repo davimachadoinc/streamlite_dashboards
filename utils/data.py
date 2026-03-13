@@ -43,6 +43,51 @@ MODULE_COLORS = {
     "base":             "#4c4c4c",
 }
 
+PLAN_LABELS = {
+    "pro":     "PRO",
+    "lite":    "LITE",
+    "starter": "STARTER",
+    "basic":   "BASIC",
+    "filha":   "FILHA",
+    "outros":  "Outros",
+}
+
+PLAN_COLORS = {
+    "pro":     "#6eda2c",
+    "lite":    "#ffffff",
+    "starter": "#a0a0a0",
+    "basic":   "#8ae650",
+    "filha":   "#4c4c4c",
+    "outros":  "#292929",
+}
+
+# Filtro SQL para excluir linhas de módulos (KIDS, JORNADA, LOJA, TOTEM, VÍDEOS, módulos STARTER)
+# Usar substituindo {col} pelo nome da coluna adequado na query
+_EXCL_MODULOS = """
+    {col} NOT LIKE '%[KIDS]%'
+    AND {col} NOT LIKE '%[JORNADA]%'
+    AND {col} NOT LIKE '%[LOJAINTELIGENTE]%'
+    AND {col} NOT LIKE '%[TOTEM]%'
+    AND {col} NOT LIKE '%[V_DEOS]%'
+    AND NOT ({col} LIKE '%[STARTER]%' AND {col} LIKE '%Módulo%')
+"""
+
+# CASE SQL para classificar plano base (usar substituindo {col})
+_PLAN_CASE = """
+    CASE
+      WHEN {col} LIKE '%[PRO]%'          THEN 'pro'
+      WHEN {col} LIKE '%[LITE]%'         THEN 'lite'
+      WHEN {col} LIKE '%[STARTER]%'      THEN 'starter'
+      WHEN {col} LIKE '%[FILHA]%'        THEN 'filha'
+      WHEN {col} LIKE '%[BASIC]%'        THEN 'basic'
+      WHEN {col} LIKE '%0 - 9 Igrejas%'  THEN 'pro'
+      WHEN {col} LIKE '%10+ Igrejas%'    THEN 'pro'
+      WHEN {col} LIKE '%App Lite%'        THEN 'lite'
+      WHEN {col} LIKE '%App da Igreja%'   THEN 'starter'
+      ELSE 'outros'
+    END
+"""
+
 
 # ─────────────────────────────────────────────
 # LAYOUT PADRÃO DE GRÁFICOS
@@ -144,6 +189,12 @@ def delta_str(curr, prev, fmt: str = "+,.0f", suffix: str = "") -> str | None:
         return f"{diff:{fmt}}{suffix}"
     except Exception:
         return f"{diff:+.2f}{suffix}"
+
+
+def fmt_brl(value, decimals: int = 2) -> str:
+    """Formata número no padrão brasileiro: 1.000,00"""
+    s = f"{value:,.{decimals}f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def no_data(label: str = "Dados não disponíveis") -> None:
@@ -339,4 +390,187 @@ def load_transactions_por_metodo() -> pd.DataFrame:
         df["mes"]             = pd.to_datetime(df["mes"])
         df["payment_method"]  = df["payment_method"].fillna("Não informado")
         df["payment_channel"] = df["payment_channel"].fillna("Não informado")
+    return df
+
+
+# ─────────────────────────────────────────────
+# ── PÁGINA 3: DESATIVAÇÕES ───────────────────
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600)
+def load_desativacoes_mensais() -> pd.DataFrame:
+    """
+    MRR perdido e clientes desativados por módulo por mês (últimos 15 meses).
+    Critério de desativação: dt_fim_mens IS NOT NULL.
+    Exclusão de renovações: se dt_fim_mens cai no último dia do mês X e o mesmo
+    (st_sincro_sac, st_descricao_prd) tem dt_inicio_mens no mês X+1, não é perda real.
+    Módulos identificados via st_descricao_prd; demais itens classificados como 'base'.
+    """
+    query = """
+    WITH desativados AS (
+      SELECT
+        st_sincro_sac,
+        st_descricao_prd,
+        CAST(dt_fim_mens AS DATE)                                    AS dt_fim,
+        DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH)                 AS mes,
+        valor_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NOT NULL
+        AND CAST(dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+        AND CAST(dt_fim_mens AS DATE) <= LAST_DAY(CURRENT_DATE())
+    ),
+    renovacoes AS (
+      -- (cliente, produto) com dt_fim_mens no último dia do mês
+      -- e um novo dt_inicio_mens no mês seguinte → renovação, não desativação
+      SELECT DISTINCT
+        d.st_sincro_sac,
+        d.st_descricao_prd,
+        d.mes
+      FROM desativados d
+      INNER JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` r
+        ON  d.st_sincro_sac    = r.st_sincro_sac
+        AND d.st_descricao_prd = r.st_descricao_prd
+        AND DATE_TRUNC(CAST(r.dt_inicio_mens AS DATE), MONTH) = DATE_ADD(d.mes, INTERVAL 1 MONTH)
+      WHERE d.dt_fim = LAST_DAY(d.dt_fim)
+        AND r.dt_inicio_mens IS NOT NULL
+    )
+    SELECT
+      d.mes,
+      CASE
+        WHEN d.st_descricao_prd LIKE '%[KIDS]%'                THEN 'kids'
+        WHEN d.st_descricao_prd LIKE '%[JORNADA]%'             THEN 'jornada'
+        WHEN d.st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'     THEN 'loja_inteligente'
+        ELSE                                                         'base'
+      END                                                       AS modulo,
+      COUNT(DISTINCT d.st_sincro_sac)                           AS clientes_desativados,
+      SUM(d.valor_total)                                        AS mrr_perdido
+    FROM desativados d
+    LEFT JOIN renovacoes rv
+      ON  d.st_sincro_sac    = rv.st_sincro_sac
+      AND d.st_descricao_prd = rv.st_descricao_prd
+      AND d.mes              = rv.mes
+    WHERE rv.st_sincro_sac IS NULL
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"]    = pd.to_datetime(df["mes"])
+        df["modulo"] = df["modulo"].str.lower()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_receita_planos_mensais() -> pd.DataFrame:
+    """
+    Receita emitida e liquidada por PLANO BASE por mês (últimos 15 meses).
+    Exclui linhas de módulos (KIDS, JORNADA, LOJA, TOTEM, VÍDEOS, módulos STARTER).
+    Classifica plano via comp_st_descricao_prd usando o DE-PARA validado.
+    """
+    query = f"""
+    SELECT
+      DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH)            AS mes,
+      {_PLAN_CASE.format(col="comp_st_descricao_prd")}               AS plano,
+      COUNT(DISTINCT st_sincro_sac)                                   AS clientes,
+      SUM(comp_valor)                                                 AS receita_emitida,
+      SUM(CASE WHEN fl_status_recb = '1' THEN comp_valor ELSE 0 END) AS receita_liquidada
+    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+    WHERE comp_st_conta_cont = '1.2.2'
+      AND CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
+      AND {_EXCL_MODULOS.format(col="comp_st_descricao_prd")}
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"]   = pd.to_datetime(df["mes"])
+        df["plano"] = df["plano"].str.lower()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_desativacoes_por_plano() -> pd.DataFrame:
+    """
+    Desativações de PLANO BASE por mês (exclui módulos).
+    Aplica a mesma lógica de exclusão de renovações de load_desativacoes_mensais:
+    dt_fim_mens no último dia do mês + dt_inicio_mens no mês seguinte = renovação, não churn.
+    """
+    query = f"""
+    WITH desativados AS (
+      SELECT
+        st_sincro_sac,
+        st_descricao_prd,
+        CAST(dt_fim_mens AS DATE)                                    AS dt_fim,
+        DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH)                 AS mes,
+        valor_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NOT NULL
+        AND CAST(dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+        AND CAST(dt_fim_mens AS DATE) <= LAST_DAY(CURRENT_DATE())
+        AND {_EXCL_MODULOS.format(col="st_descricao_prd")}
+    ),
+    renovacoes AS (
+      SELECT DISTINCT d.st_sincro_sac, d.st_descricao_prd, d.mes
+      FROM desativados d
+      INNER JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` r
+        ON  d.st_sincro_sac    = r.st_sincro_sac
+        AND d.st_descricao_prd = r.st_descricao_prd
+        AND DATE_TRUNC(CAST(r.dt_inicio_mens AS DATE), MONTH) = DATE_ADD(d.mes, INTERVAL 1 MONTH)
+      WHERE d.dt_fim = LAST_DAY(d.dt_fim)
+        AND r.dt_inicio_mens IS NOT NULL
+    )
+    SELECT
+      d.mes,
+      {_PLAN_CASE.format(col="d.st_descricao_prd")}                  AS plano,
+      COUNT(DISTINCT d.st_sincro_sac)                                 AS clientes_desativados,
+      SUM(d.valor_total)                                              AS mrr_perdido
+    FROM desativados d
+    LEFT JOIN renovacoes rv
+      ON  d.st_sincro_sac    = rv.st_sincro_sac
+      AND d.st_descricao_prd = rv.st_descricao_prd
+      AND d.mes              = rv.mes
+    WHERE rv.st_sincro_sac IS NULL
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"]   = pd.to_datetime(df["mes"])
+        df["plano"] = df["plano"].str.lower()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_base_ativa_por_plano() -> pd.DataFrame:
+    """
+    Clientes ativos por PLANO BASE no início de cada mês (últimos 15 meses).
+    Usado como denominador para cálculo de churn: item ativo se
+    dt_inicio_mens <= primeiro dia do mês E (dt_fim_mens IS NULL OR dt_fim_mens > primeiro dia do mês).
+    Exclui módulos para contar apenas o plano base de cada cliente.
+    """
+    query = f"""
+    SELECT
+      cal.mes,
+      {_PLAN_CASE.format(col="mrr.st_descricao_prd")}                AS plano,
+      COUNT(DISTINCT mrr.st_sincro_sac)                               AS clientes_ativos
+    FROM (
+      SELECT mes
+      FROM UNNEST(GENERATE_DATE_ARRAY(
+        DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH),
+        DATE_TRUNC(CURRENT_DATE(), MONTH),
+        INTERVAL 1 MONTH
+      )) AS mes
+    ) cal
+    CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
+    WHERE CAST(mrr.dt_inicio_mens AS DATE) <= cal.mes
+      AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) > cal.mes)
+      AND {_EXCL_MODULOS.format(col="mrr.st_descricao_prd")}
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"]   = pd.to_datetime(df["mes"])
+        df["plano"] = df["plano"].str.lower()
     return df
