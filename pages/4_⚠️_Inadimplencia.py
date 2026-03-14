@@ -2,16 +2,14 @@
 pages/4_⚠️_Inadimplencia.py
 Dashboard de Inadimplência — série diária 30d / 90d e perfil dos inadimplentes.
 
-Racional:
-  Inadimplência 30d / 90d:
-    Para cada dia no eixo X → soma de comp_valor (1.2.1 + 1.2.2) com vencimento
-    naquele dia, de clientes não desativados na data, ainda em aberto hoje.
-    % = valor ainda aberto / total emitido naquele dia.
-    O filtro 30d/90d = idade mínima do vencimento (excluir cobranças muito recentes).
+Racional — janela ROLANTE:
+  Para cada dia de observação D no eixo X:
+    30d → considera boletos com vencimento em [D-30, D]
+    90d → considera boletos com vencimento em [D-90, D]
+    % = valor não pago EM D / total emitido na janela
 
-  Sem filtro de idade:
-    Mesmo cálculo sem restrição de idade — mostra todo valor não recebido
-    por dia de vencimento, incluindo cobranças recentes.
+  Exemplo: em 12/02, 30d olha boletos vencidos de 13/jan a 12/fev.
+  Se em 13/02 um boleto de 05/fev for pago, ele sai do numerador do dia 13/02.
 """
 import streamlit as st
 import plotly.graph_objects as go
@@ -97,25 +95,22 @@ with k4:
 st.divider()
 
 # ─────────────────────────────────────────────
-# SEÇÃO 1 — Inadimplência 30d vs sem filtro (largura inteira, eixo diário)
+# SEÇÃO 1 — Inadimplência 30d vs 90d (janela rolante)
 # ─────────────────────────────────────────────
-st.subheader("Inadimplência 30 dias vs Sem Filtro de Idade")
+st.subheader("Inadimplência — Janela 30 dias vs 90 dias")
 
-df_30  = df_serie[df_serie["emitido_30d"] > 0].copy()
-df_all = df_serie[df_serie["emitido"] > 0].copy()
-
-if df_30.empty:
+if df_serie.empty:
     no_data("Sem dados suficientes para o período.")
 else:
     fig = go.Figure()
     fig.add_scatter(
-        x=df_30["dia"], y=df_30["pct_inadimp_30d"],
-        name="Inadimplência 30d",
+        x=df_serie["dia"], y=df_serie["pct_inadimp_30d"],
+        name="30d (vencidos últimos 30 dias)",
         mode="lines", line=dict(color=PALETTE[0], width=2),
     )
     fig.add_scatter(
-        x=df_all["dia"], y=df_all["pct_inadimp"],
-        name="Sem filtro de idade",
+        x=df_serie["dia"], y=df_serie["pct_inadimp_90d"],
+        name="90d (vencidos últimos 90 dias)",
         mode="lines", line=dict(color=PALETTE[3], width=1.5, dash="dot"),
     )
     fig.update_layout(
@@ -123,32 +118,6 @@ else:
         xaxis=dict(type="date", tickformat="%d/%b/%y", dtick=604800000),
     )
     st.plotly_chart(chart_layout(fig, height=380, legend_bottom=True), use_container_width=True)
-
-st.divider()
-
-# ─────────────────────────────────────────────
-# SEÇÃO 2 — Inadimplência 90d (largura inteira, eixo diário)
-# ─────────────────────────────────────────────
-st.subheader("Inadimplência 90 dias")
-
-df_90 = df_serie[df_serie["emitido_90d"] > 0].copy()
-
-if df_90.empty:
-    no_data("Sem dados com 90+ dias de vencimento no período.")
-else:
-    fig = go.Figure()
-    fig.add_scatter(
-        x=df_90["dia"], y=df_90["pct_inadimp_90d"],
-        name="Inadimplência 90d",
-        mode="lines", line=dict(color=PALETTE[0], width=2),
-        fill="tozeroy", fillcolor="rgba(110,218,44,0.08)",
-    )
-    fig.update_layout(
-        showlegend=False,
-        yaxis=dict(ticksuffix="%"),
-        xaxis=dict(type="date", tickformat="%d/%b/%y", dtick=604800000),
-    )
-    st.plotly_chart(chart_layout(fig, height=340), use_container_width=True)
 
 st.divider()
 

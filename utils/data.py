@@ -551,15 +551,14 @@ def load_inadimplencia_serie() -> pd.DataFrame:
     """
     Série histórica de inadimplência — snapshot por dia útil (últimos 6 meses).
 
-    Para cada data de observação D (dias úteis, até 2 dias úteis atrás):
-      emitido_30d = SUM(comp_valor) com vencimento em [D-365, D-30], cliente ativo na data
-      aberto_30d  = mesmo conjunto onde o boleto ainda não havia sido pago EM D
-                    (dt_liquidacao IS NULL OR dt_liquidacao > D)
-      pct_inadimp_30d = aberto_30d / emitido_30d × 100
-    Idem para 90d e sem filtro de idade ([D-365, D]).
+    Janela ROLANTE: para cada data de observação D, olha os N dias anteriores de vencimento.
+      30d: boletos com vencimento em [D-30, D] — emitido no último mês
+      90d: boletos com vencimento em [D-90, D] — emitido nos últimos 3 meses
+      Em ambos: aberto = boletos ainda não pagos EM D (dia_pago IS NULL OR dia_pago > D)
+      % = aberto / emitido × 100
 
-    Assim, ao olhar para o dia 07/02/2026, vê-se exatamente qual era o estoque de
-    inadimplência naquele momento — boletos pagos depois daquele dia contam como abertos.
+    Exemplo: em 12/02, 30d olha [13/01–12/02]. Se em 13/02 um boleto vencido em 05/02
+    for pago, ele sai do numerador do dia 13/02 em diante.
     """
     # --- 1. Carrega boletos brutos do BigQuery ---
     query = """
@@ -599,28 +598,26 @@ def load_inadimplencia_serie() -> pd.DataFrame:
     # --- 3. Snapshot para cada data de observação ---
     rows = []
     for D in obs_dates:
-        D_np  = np.datetime64(D)
-        D_30  = np.datetime64(D - pd.Timedelta(days=30))
-        D_90  = np.datetime64(D - pd.Timedelta(days=90))
-        D_win = np.datetime64(D - pd.Timedelta(days=365))   # janela de 12 meses
+        D_np      = np.datetime64(D)
+        D_30_ini  = np.datetime64(D - pd.Timedelta(days=30))   # início janela 30d
+        D_90_ini  = np.datetime64(D - pd.Timedelta(days=90))   # início janela 90d
 
         # Boleto aberto EM D: não pago ou pago depois de D
         is_open = np.isnat(p) | (p > D_np)
 
-        # Sem filtro: vencimento em [D-365, D]
-        m_sf        = (v >= D_win) & (v <= D_np)
-        emitido     = float(c_vals[m_sf].sum())
-        aberto      = float(c_vals[m_sf & is_open].sum())
-
-        # 30d: vencimento em [D-365, D-30]
-        m_30        = (v >= D_win) & (v <= D_30)
+        # 30d: vencimento em [D-30, D]  ← janela rolante de 30 dias
+        m_30        = (v >= D_30_ini) & (v <= D_np)
         emitido_30d = float(c_vals[m_30].sum())
         aberto_30d  = float(c_vals[m_30 & is_open].sum())
 
-        # 90d: vencimento em [D-365, D-90]
-        m_90        = (v >= D_win) & (v <= D_90)
+        # 90d: vencimento em [D-90, D]  ← janela rolante de 90 dias
+        m_90        = (v >= D_90_ini) & (v <= D_np)
         emitido_90d = float(c_vals[m_90].sum())
         aberto_90d  = float(c_vals[m_90 & is_open].sum())
+
+        # emitido/aberto geral (alias de 90d, mantido para compatibilidade com KPIs)
+        emitido = emitido_90d
+        aberto  = aberto_90d
 
         rows.append({
             "dia":         D,
