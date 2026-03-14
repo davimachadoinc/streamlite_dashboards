@@ -102,28 +102,27 @@ st.subheader("Inadimplência — Janela 30 dias vs 90 dias")
 if df_serie.empty:
     no_data("Sem dados suficientes para o período.")
 else:
-    # Ticks a cada 7 dias + último dia sempre visível (strings ISO para Plotly)
-    _dates   = df_serie["dia"].sort_values()
-    _end     = _dates.iloc[-1]
-    _ticks   = list(pd.date_range(start=_dates.iloc[0], end=_end, freq="7D"))
-    if not _ticks or _ticks[-1].date() != _end.date():
-        _ticks.append(_end)
-    _ticks   = [t.strftime("%Y-%m-%d") for t in _ticks]
-
     fig = go.Figure()
     fig.add_scatter(
         x=df_serie["dia"], y=df_serie["pct_inadimp_30d"],
         name="30d (vencidos últimos 30 dias)",
         mode="lines", line=dict(color=PALETTE[0], width=2),
+        hovertemplate="%{x|%d/%m/%Y}<br>%{y:.1f}%<extra></extra>",
     )
     fig.add_scatter(
         x=df_serie["dia"], y=df_serie["pct_inadimp_90d"],
         name="90d (vencidos últimos 90 dias)",
         mode="lines", line=dict(color=PALETTE[3], width=1.5, dash="dot"),
+        hovertemplate="%{x|%d/%m/%Y}<br>%{y:.1f}%<extra></extra>",
     )
     fig.update_layout(
         yaxis=dict(ticksuffix="%"),
-        xaxis=dict(type="date", tickformat="%d/%m", tickvals=_ticks),
+        xaxis=dict(
+            type="date",
+            tickformat="%d/%m",
+            dtick=604800000,
+            ticklabelmode="instant",
+        ),
     )
     st.plotly_chart(chart_layout(fig, height=380, legend_bottom=True), use_container_width=True)
 
