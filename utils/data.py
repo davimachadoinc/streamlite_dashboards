@@ -566,8 +566,7 @@ def load_inadimplencia_serie() -> pd.DataFrame:
     WITH cobr AS (
       SELECT
         b.st_sincro_sac,
-        DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) AS mes,
-        CAST(b.dt_vencimento_recb AS DATE)                    AS dt_venc,
+        CAST(b.dt_vencimento_recb AS DATE) AS dia,
         b.fl_status_recb,
         b.comp_valor
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
@@ -577,29 +576,25 @@ def load_inadimplencia_serie() -> pd.DataFrame:
         AND CAST(b.dt_vencimento_recb AS DATE)
               >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
         AND CAST(b.dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
-        -- cliente não estava desativado na data da cobrança
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
     )
     SELECT
-      mes,
-      -- Base sem filtro de idade (30d "sem atrasos")
+      dia,
       SUM(comp_valor)                                                    AS emitido,
       SUM(CASE WHEN fl_status_recb = '0' THEN comp_valor ELSE 0 END)    AS aberto,
-      -- Inadimplência 30d: vencidos há >= 30 dias
       SUM(CASE
-            WHEN DATE_DIFF(CURRENT_DATE(), dt_venc, DAY) >= 30
+            WHEN DATE_DIFF(CURRENT_DATE(), dia, DAY) >= 30
             THEN comp_valor ELSE 0 END)                                  AS emitido_30d,
       SUM(CASE
-            WHEN DATE_DIFF(CURRENT_DATE(), dt_venc, DAY) >= 30
+            WHEN DATE_DIFF(CURRENT_DATE(), dia, DAY) >= 30
              AND fl_status_recb = '0'
             THEN comp_valor ELSE 0 END)                                  AS aberto_30d,
-      -- Inadimplência 90d: vencidos há >= 90 dias
       SUM(CASE
-            WHEN DATE_DIFF(CURRENT_DATE(), dt_venc, DAY) >= 90
+            WHEN DATE_DIFF(CURRENT_DATE(), dia, DAY) >= 90
             THEN comp_valor ELSE 0 END)                                  AS emitido_90d,
       SUM(CASE
-            WHEN DATE_DIFF(CURRENT_DATE(), dt_venc, DAY) >= 90
+            WHEN DATE_DIFF(CURRENT_DATE(), dia, DAY) >= 90
              AND fl_status_recb = '0'
             THEN comp_valor ELSE 0 END)                                  AS aberto_90d
     FROM cobr
@@ -608,12 +603,12 @@ def load_inadimplencia_serie() -> pd.DataFrame:
     """
     df = _bq_query(query, "bigquery_bi")
     if not df.empty:
-        df["mes"] = pd.to_datetime(df["mes"])
+        df["dia"] = pd.to_datetime(df["dia"])
         for col in ["emitido", "aberto", "emitido_30d", "aberto_30d", "emitido_90d", "aberto_90d"]:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-        df["pct_inadimp"]     = (df["aberto"]    / df["emitido"].replace(0, float("nan")) * 100).round(2)
-        df["pct_inadimp_30d"] = (df["aberto_30d"] / df["emitido_30d"].replace(0, float("nan")) * 100).round(2)
-        df["pct_inadimp_90d"] = (df["aberto_90d"] / df["emitido_90d"].replace(0, float("nan")) * 100).round(2)
+        df["pct_inadimp"]     = (df["aberto"]     / df["emitido"].replace(0, pd.NA)     * 100).round(2)
+        df["pct_inadimp_30d"] = (df["aberto_30d"] / df["emitido_30d"].replace(0, pd.NA) * 100).round(2)
+        df["pct_inadimp_90d"] = (df["aberto_90d"] / df["emitido_90d"].replace(0, pd.NA) * 100).round(2)
     return df
 
 
