@@ -606,9 +606,9 @@ def load_inadimplencia_serie() -> pd.DataFrame:
         df["dia"] = pd.to_datetime(df["dia"])
         for col in ["emitido", "aberto", "emitido_30d", "aberto_30d", "emitido_90d", "aberto_90d"]:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-        df["pct_inadimp"]     = (df["aberto"]     / df["emitido"].replace(0, pd.NA)     * 100).round(2)
-        df["pct_inadimp_30d"] = (df["aberto_30d"] / df["emitido_30d"].replace(0, pd.NA) * 100).round(2)
-        df["pct_inadimp_90d"] = (df["aberto_90d"] / df["emitido_90d"].replace(0, pd.NA) * 100).round(2)
+        df["pct_inadimp"]     = (df["aberto"]     / df["emitido"].where(df["emitido"] > 0)         * 100).round(2)
+        df["pct_inadimp_30d"] = (df["aberto_30d"] / df["emitido_30d"].where(df["emitido_30d"] > 0) * 100).round(2)
+        df["pct_inadimp_90d"] = (df["aberto_90d"] / df["emitido_90d"].where(df["emitido_90d"] > 0) * 100).round(2)
     return df
 
 
