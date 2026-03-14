@@ -653,11 +653,18 @@ def load_inadimplencia_por_plano() -> pd.DataFrame:
       ON b.st_sincro_sac = c.st_sincro_sac
     WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
       AND b.fl_status_recb = '0'
+      AND b.comp_valor > 1
       AND CAST(b.dt_vencimento_recb AS DATE)
             BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
       AND (c.dt_desativacao_sac IS NULL
            OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
       AND {_EXCL_MODULOS.format(col="b.comp_st_descricao_prd")}
+      AND EXISTS (
+        SELECT 1
+        FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` pago
+        WHERE pago.st_sincro_sac = b.st_sincro_sac
+          AND pago.fl_status_recb = '1'
+      )
     GROUP BY 1
     ORDER BY valor_aberto DESC
     """
@@ -710,10 +717,10 @@ def load_inadimplencia_por_frequencia() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def load_inadimplencia_top_clientes() -> pd.DataFrame:
+def load_inadimplencia_top_clientes(dias: int = 30) -> pd.DataFrame:
     """
-    Top 30 clientes com maior valor em aberto (inadimplência 30d atual).
-    Inclui plano, valor em aberto, boletos abertos e dias máximos de atraso.
+    Top 30 clientes com maior valor em aberto na janela rolante de N dias.
+    Só conta clientes com comp_valor > 1 e que já pagaram pelo menos um boleto.
     """
     query = f"""
     WITH inad AS (
@@ -728,11 +735,18 @@ def load_inadimplencia_top_clientes() -> pd.DataFrame:
         ON b.st_sincro_sac = c.st_sincro_sac
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
         AND b.fl_status_recb = '0'
+        AND b.comp_valor > 1
         AND CAST(b.dt_vencimento_recb AS DATE)
-              BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
+              BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL {dias} DAY) AND CURRENT_DATE()
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
         AND {_EXCL_MODULOS.format(col="b.comp_st_descricao_prd")}
+        AND EXISTS (
+          SELECT 1
+          FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` pago
+          WHERE pago.st_sincro_sac = b.st_sincro_sac
+            AND pago.fl_status_recb = '1'
+        )
       GROUP BY 1
     )
     SELECT

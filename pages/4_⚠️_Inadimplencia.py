@@ -29,7 +29,7 @@ from utils.data import (
     chart_layout, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data, fmt_brl,
     load_inadimplencia_serie, load_inadimplencia_por_plano,
-    load_inadimplencia_por_frequencia, load_inadimplencia_top_clientes,
+    load_inadimplencia_top_clientes,
 )
 
 inject_css()
@@ -43,10 +43,10 @@ with col_filter:
 
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando dados de inadimplência..."):
-    df_serie = load_inadimplencia_serie()
-    df_plano = load_inadimplencia_por_plano()
-    df_freq  = load_inadimplencia_por_frequencia()
-    df_top   = load_inadimplencia_top_clientes()
+    df_serie  = load_inadimplencia_serie()
+    df_plano  = load_inadimplencia_por_plano()
+    df_top30  = load_inadimplencia_top_clientes(30)
+    df_top90  = load_inadimplencia_top_clientes(90)
 
 if df_serie.empty:
     no_data("Nenhum dado de inadimplência encontrado.")
@@ -122,12 +122,11 @@ else:
 st.divider()
 
 # ─────────────────────────────────────────────
-# SEÇÃO 3 — Perfil dos Inadimplentes (snapshot atual)
+# SEÇÃO 3 — Perfil dos Inadimplentes (snapshot 30d atual)
 # ─────────────────────────────────────────────
 st.subheader("Perfil dos Inadimplentes (30d — snapshot atual)")
-col_a, col_b = st.columns(2)
 
-cores_freq = [PALETTE[0], PALETTE[6], PALETTE[3], PALETTE[4], PALETTE[1], PALETTE[8]]
+col_a, col_b = st.columns(2)
 
 with col_a:
     st.subheader("Valor em Aberto por Plano")
@@ -155,28 +154,6 @@ with col_a:
         st.plotly_chart(chart_layout(fig, height=320), use_container_width=True)
 
 with col_b:
-    st.subheader("Clientes por Qtd. de Boletos em Aberto")
-    if df_freq.empty:
-        no_data()
-    else:
-        fig = go.Figure(go.Pie(
-            labels=df_freq["faixa"],
-            values=df_freq["clientes"],
-            hole=0.45,
-            marker_colors=cores_freq[:len(df_freq)],
-            textfont=dict(size=12, family="Outfit"),
-        ))
-        fig.update_traces(
-            texttemplate="%{label}<br>%{percent}",
-            hovertemplate="<b>%{label}</b><br>%{value} clientes<br>%{percent}<extra></extra>",
-        )
-        st.plotly_chart(chart_layout(fig, height=320), use_container_width=True)
-
-st.divider()
-
-col_c, col_d = st.columns(2)
-
-with col_c:
     st.subheader("Clientes Inadimplentes por Plano")
     if df_plano.empty:
         no_data()
@@ -196,38 +173,28 @@ with col_c:
         fig.update_layout(showlegend=False)
         st.plotly_chart(chart_layout(fig, height=320), use_container_width=True)
 
-with col_d:
-    st.subheader("Valor em Aberto por Frequência")
-    if df_freq.empty:
-        no_data()
-    else:
-        fig = go.Figure()
-        fig.add_bar(
-            x=df_freq["faixa"], y=df_freq["valor_aberto"],
-            marker_color=cores_freq[:len(df_freq)],
-            text=df_freq["valor_aberto"].apply(lambda v: f"R$ {fmt_brl(v, 0)}"),
-            textposition="outside",
-            textfont=dict(size=11, color="#a0a0a0"),
-        )
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(chart_layout(fig, height=320), use_container_width=True)
-
 st.divider()
 
-# ── Tabela Top Inadimplentes ──────────────────
-with st.expander("📋 Top 30 Clientes — Maior Valor em Aberto (30d)"):
-    if df_top.empty:
+# ── Tabelas Top Inadimplentes ─────────────────
+def _render_top_table(df: pd.DataFrame) -> None:
+    if df.empty:
         no_data()
-    else:
-        df_show = df_top.copy()
-        df_show["plano"]        = df_show["plano"].map(PLAN_LABELS).fillna(df_show["plano"])
-        df_show["valor_aberto"] = df_show["valor_aberto"].apply(lambda v: f"R$ {fmt_brl(v)}")
-        df_show = df_show.rename(columns={
-            "id_cliente":      "ID",
-            "nome_cliente":    "Cliente",
-            "plano":           "Plano",
-            "valor_aberto":    "Valor em Aberto",
-            "boletos_abertos": "Boletos Abertos",
-            "max_dias_atraso": "Máx. Dias Atraso",
-        })
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        return
+    df_show = df.copy()
+    df_show["plano"]        = df_show["plano"].map(PLAN_LABELS).fillna(df_show["plano"])
+    df_show["valor_aberto"] = df_show["valor_aberto"].apply(lambda v: f"R$ {fmt_brl(v)}")
+    df_show = df_show.rename(columns={
+        "id_cliente":      "ID",
+        "nome_cliente":    "Cliente",
+        "plano":           "Plano",
+        "valor_aberto":    "Valor em Aberto",
+        "boletos_abertos": "Boletos Abertos",
+        "max_dias_atraso": "Máx. Dias Atraso",
+    })
+    st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+with st.expander("📋 Top 30 Clientes — Maior Valor em Aberto (30d)"):
+    _render_top_table(df_top30)
+
+with st.expander("📋 Top 30 Clientes — Maior Valor em Aberto (90d)"):
+    _render_top_table(df_top90)
