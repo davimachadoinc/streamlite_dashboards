@@ -8,6 +8,7 @@ import json
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+import numpy as np
 from datetime import date
 from dateutil.relativedelta import relativedelta
 from google.oauth2 import service_account
@@ -548,68 +549,95 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
 @st.cache_data(ttl=3600)
 def load_inadimplencia_serie() -> pd.DataFrame:
     """
-    Série histórica de inadimplência por mês de vencimento (últimos 15 meses).
-    Categorias: mensalidade (1.2.2) e setup (1.2.1).
-    Exclui clientes desativados na data da cobrança.
+    Série histórica de inadimplência — snapshot por dia útil (últimos 6 meses).
 
-    Colunas retornadas:
-      mes               — mês de vencimento
-      emitido           — total comp_valor emitido no mês
-      aberto            — comp_valor ainda em aberto (fl_status_recb='0') hoje
-                          → "30d sem atrasos": aberto/emitido sem filtro de idade
-      emitido_30d       — emitido com vencimento >= 30 dias atrás
-      aberto_30d        — aberto dentro do emitido_30d
-      emitido_90d       — emitido com vencimento >= 90 dias atrás
-      aberto_90d        — aberto dentro do emitido_90d
+    Para cada data de observação D (dias úteis, até 2 dias úteis atrás):
+      emitido_30d = SUM(comp_valor) com vencimento em [D-365, D-30], cliente ativo na data
+      aberto_30d  = mesmo conjunto onde o boleto ainda não havia sido pago EM D
+                    (dt_liquidacao IS NULL OR dt_liquidacao > D)
+      pct_inadimp_30d = aberto_30d / emitido_30d × 100
+    Idem para 90d e sem filtro de idade ([D-365, D]).
+
+    Assim, ao olhar para o dia 07/02/2026, vê-se exatamente qual era o estoque de
+    inadimplência naquele momento — boletos pagos depois daquele dia contam como abertos.
     """
+    # --- 1. Carrega boletos brutos do BigQuery ---
     query = """
-    WITH cobr AS (
-      SELECT
-        b.st_sincro_sac,
-        CAST(b.dt_vencimento_recb AS DATE) AS dia,
-        b.fl_status_recb,
-        b.comp_valor
-      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
-      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
-        ON b.st_sincro_sac = c.st_sincro_sac
-      WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
-        AND CAST(b.dt_vencimento_recb AS DATE)
-              >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
-        AND CAST(b.dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
-        AND (c.dt_desativacao_sac IS NULL
-             OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
-    )
     SELECT
-      dia,
-      SUM(comp_valor)                                                    AS emitido,
-      SUM(CASE WHEN fl_status_recb = '0' THEN comp_valor ELSE 0 END)    AS aberto,
-      SUM(CASE
-            WHEN DATE_DIFF(CURRENT_DATE(), dia, DAY) >= 30
-            THEN comp_valor ELSE 0 END)                                  AS emitido_30d,
-      SUM(CASE
-            WHEN DATE_DIFF(CURRENT_DATE(), dia, DAY) >= 30
-             AND fl_status_recb = '0'
-            THEN comp_valor ELSE 0 END)                                  AS aberto_30d,
-      SUM(CASE
-            WHEN DATE_DIFF(CURRENT_DATE(), dia, DAY) >= 90
-            THEN comp_valor ELSE 0 END)                                  AS emitido_90d,
-      SUM(CASE
-            WHEN DATE_DIFF(CURRENT_DATE(), dia, DAY) >= 90
-             AND fl_status_recb = '0'
-            THEN comp_valor ELSE 0 END)                                  AS aberto_90d
-    FROM cobr
-    GROUP BY 1
-    ORDER BY 1
+      CAST(b.dt_vencimento_recb  AS DATE) AS dia_venc,
+      CAST(b.dt_liquidacao_recb  AS DATE) AS dia_pago,
+      b.comp_valor
+    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
+    LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+      ON b.st_sincro_sac = c.st_sincro_sac
+    WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
+      AND CAST(b.dt_vencimento_recb AS DATE)
+            >= DATE_SUB(CURRENT_DATE(), INTERVAL 18 MONTH)
+      AND CAST(b.dt_vencimento_recb AS DATE) < CURRENT_DATE()
+      AND (c.dt_desativacao_sac IS NULL
+           OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
     """
-    df = _bq_query(query, "bigquery_bi")
-    if not df.empty:
-        df["dia"] = pd.to_datetime(df["dia"])
-        for col in ["emitido", "aberto", "emitido_30d", "aberto_30d", "emitido_90d", "aberto_90d"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-        df["pct_inadimp"]     = (df["aberto"]     / df["emitido"].where(df["emitido"] > 0)         * 100).round(2)
-        df["pct_inadimp_30d"] = (df["aberto_30d"] / df["emitido_30d"].where(df["emitido_30d"] > 0) * 100).round(2)
-        df["pct_inadimp_90d"] = (df["aberto_90d"] / df["emitido_90d"].where(df["emitido_90d"] > 0) * 100).round(2)
-    return df
+    df_b = _bq_query(query, "bigquery_bi")
+    if df_b.empty:
+        return pd.DataFrame()
+
+    df_b["dia_venc"]   = pd.to_datetime(df_b["dia_venc"])
+    df_b["dia_pago"]   = pd.to_datetime(df_b["dia_pago"])
+    df_b["comp_valor"] = pd.to_numeric(df_b["comp_valor"], errors="coerce").fillna(0)
+
+    # Arrays numpy para operações vetorizadas dentro do loop
+    v      = df_b["dia_venc"].values    # datetime64[ns]
+    p      = df_b["dia_pago"].values    # datetime64[ns] — NaT se não pago
+    c_vals = df_b["comp_valor"].values
+
+    # --- 2. Datas de observação: dias úteis últimos 6 meses até 2 dias úteis atrás ---
+    today_ts  = pd.Timestamp.today().normalize()
+    end_obs   = today_ts - pd.tseries.offsets.BDay(2)
+    start_obs = today_ts - pd.DateOffset(months=6)
+    obs_dates = pd.bdate_range(start=start_obs, end=end_obs)
+
+    # --- 3. Snapshot para cada data de observação ---
+    rows = []
+    for D in obs_dates:
+        D_np  = np.datetime64(D)
+        D_30  = np.datetime64(D - pd.Timedelta(days=30))
+        D_90  = np.datetime64(D - pd.Timedelta(days=90))
+        D_win = np.datetime64(D - pd.Timedelta(days=365))   # janela de 12 meses
+
+        # Boleto aberto EM D: não pago ou pago depois de D
+        is_open = np.isnat(p) | (p > D_np)
+
+        # Sem filtro: vencimento em [D-365, D]
+        m_sf        = (v >= D_win) & (v <= D_np)
+        emitido     = float(c_vals[m_sf].sum())
+        aberto      = float(c_vals[m_sf & is_open].sum())
+
+        # 30d: vencimento em [D-365, D-30]
+        m_30        = (v >= D_win) & (v <= D_30)
+        emitido_30d = float(c_vals[m_30].sum())
+        aberto_30d  = float(c_vals[m_30 & is_open].sum())
+
+        # 90d: vencimento em [D-365, D-90]
+        m_90        = (v >= D_win) & (v <= D_90)
+        emitido_90d = float(c_vals[m_90].sum())
+        aberto_90d  = float(c_vals[m_90 & is_open].sum())
+
+        rows.append({
+            "dia":         D,
+            "emitido":     emitido,
+            "aberto":      aberto,
+            "emitido_30d": emitido_30d,
+            "aberto_30d":  aberto_30d,
+            "emitido_90d": emitido_90d,
+            "aberto_90d":  aberto_90d,
+        })
+
+    result = pd.DataFrame(rows)
+    result["dia"] = pd.to_datetime(result["dia"])
+    result["pct_inadimp"]     = (result["aberto"]     / result["emitido"].where(result["emitido"] > 0)         * 100).round(2)
+    result["pct_inadimp_30d"] = (result["aberto_30d"] / result["emitido_30d"].where(result["emitido_30d"] > 0) * 100).round(2)
+    result["pct_inadimp_90d"] = (result["aberto_90d"] / result["emitido_90d"].where(result["emitido_90d"] > 0) * 100).round(2)
+    return result
 
 
 @st.cache_data(ttl=3600)

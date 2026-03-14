@@ -76,9 +76,9 @@ with k1:
         delta_color="inverse",
     )
 
-aberto_30d_total = df_serie["aberto_30d"].sum()
+aberto_30d_atual = last_val(df_serie, "aberto_30d", "dia")
 with k2:
-    st.metric("Valor em Aberto 30d (período)", f"R$ {fmt_brl(aberto_30d_total)}")
+    st.metric("Valor em Aberto 30d (snapshot)", f"R$ {fmt_brl(aberto_30d_atual)}" if aberto_30d_atual is not None else "—")
 
 curr_90 = last_val(df_serie, "pct_inadimp_90d", "dia")
 prev_90 = prev_val(df_serie, "pct_inadimp_90d", "dia")
@@ -90,9 +90,9 @@ with k3:
         delta_color="inverse",
     )
 
-aberto_90d_total = df_serie["aberto_90d"].sum()
+aberto_90d_atual = last_val(df_serie, "aberto_90d", "dia")
 with k4:
-    st.metric("Valor em Aberto 90d (período)", f"R$ {fmt_brl(aberto_90d_total)}")
+    st.metric("Valor em Aberto 90d (snapshot)", f"R$ {fmt_brl(aberto_90d_atual)}" if aberto_90d_atual is not None else "—")
 
 st.divider()
 
@@ -120,7 +120,7 @@ else:
     )
     fig.update_layout(
         yaxis=dict(ticksuffix="%"),
-        xaxis=dict(type="date", tickformat="%d/%b/%y"),
+        xaxis=dict(type="date", tickformat="%d/%b/%y", dtick=604800000),
     )
     st.plotly_chart(chart_layout(fig, height=380, legend_bottom=True), use_container_width=True)
 
@@ -146,7 +146,7 @@ else:
     fig.update_layout(
         showlegend=False,
         yaxis=dict(ticksuffix="%"),
-        xaxis=dict(type="date", tickformat="%d/%b/%y"),
+        xaxis=dict(type="date", tickformat="%d/%b/%y", dtick=604800000),
     )
     st.plotly_chart(chart_layout(fig, height=340), use_container_width=True)
 
