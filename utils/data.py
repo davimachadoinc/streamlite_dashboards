@@ -653,7 +653,8 @@ def load_inadimplencia_por_plano() -> pd.DataFrame:
       ON b.st_sincro_sac = c.st_sincro_sac
     WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
       AND b.fl_status_recb = '0'
-      AND DATE_DIFF(CURRENT_DATE(), CAST(b.dt_vencimento_recb AS DATE), DAY) >= 30
+      AND CAST(b.dt_vencimento_recb AS DATE)
+            BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
       AND (c.dt_desativacao_sac IS NULL
            OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
       AND {_EXCL_MODULOS.format(col="b.comp_st_descricao_prd")}
@@ -683,7 +684,8 @@ def load_inadimplencia_por_frequencia() -> pd.DataFrame:
         ON b.st_sincro_sac = c.st_sincro_sac
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
         AND b.fl_status_recb = '0'
-        AND DATE_DIFF(CURRENT_DATE(), CAST(b.dt_vencimento_recb AS DATE), DAY) >= 30
+        AND CAST(b.dt_vencimento_recb AS DATE)
+              BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
       GROUP BY 1
@@ -726,7 +728,8 @@ def load_inadimplencia_top_clientes() -> pd.DataFrame:
         ON b.st_sincro_sac = c.st_sincro_sac
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
         AND b.fl_status_recb = '0'
-        AND DATE_DIFF(CURRENT_DATE(), CAST(b.dt_vencimento_recb AS DATE), DAY) >= 30
+        AND CAST(b.dt_vencimento_recb AS DATE)
+              BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
         AND {_EXCL_MODULOS.format(col="b.comp_st_descricao_prd")}
