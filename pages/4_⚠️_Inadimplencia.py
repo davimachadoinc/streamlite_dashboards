@@ -102,12 +102,13 @@ st.subheader("Inadimplência — Janela 30 dias vs 90 dias")
 if df_serie.empty:
     no_data("Sem dados suficientes para o período.")
 else:
-    # Ticks a cada 7 dias + último dia sempre visível
+    # Ticks a cada 7 dias + último dia sempre visível (strings ISO para Plotly)
     _dates   = df_serie["dia"].sort_values()
     _end     = _dates.iloc[-1]
     _ticks   = list(pd.date_range(start=_dates.iloc[0], end=_end, freq="7D"))
-    if not _ticks or _ticks[-1] != _end:
+    if not _ticks or _ticks[-1].date() != _end.date():
         _ticks.append(_end)
+    _ticks   = [t.strftime("%Y-%m-%d") for t in _ticks]
 
     fig = go.Figure()
     fig.add_scatter(
@@ -155,7 +156,8 @@ with col_a:
         )
         fig.update_layout(
             showlegend=False,
-            xaxis=dict(showgrid=True, gridcolor="#292929", type="linear"),
+            xaxis=dict(showgrid=True, gridcolor="#292929", type="linear",
+                       showticklabels=False),
             yaxis=dict(showgrid=False),
         )
         st.plotly_chart(chart_layout(fig, height=320), use_container_width=True)
