@@ -159,7 +159,7 @@ fig.update_layout(xaxis=dict(type="date", tickformat="%d/%m", tickvals=_ticks))
 ### Compatibilidade Python 3.14 (Streamlit Cloud)
 - **Não usar `pd.NA`** como substituto de zero em divisões — converte série para `object` dtype, quebrando `.round()`.
 - Usar `series.where(series > 0)` — mantém `float` dtype com `NaN` nos zeros.
-- **Não adicionar `Authlib` ao `requirements.txt`** — Streamlit ≥ 1.41 gerencia OAuth internamente; adicionar causa `ImportError` na Cloud.
+- **`Authlib>=1.3.2` é obrigatório no `requirements.txt`** — o Streamlit Cloud exige a lib explicitamente para o fluxo OAuth (`st.login()`), mesmo em versões ≥ 1.41.
 
 ### Inadimplência — padrão de implementação
 - Função `load_inadimplencia_serie()` carrega boletos brutos (18 meses) do BQ e computa snapshots em Python com numpy, via loop sobre `pd.bdate_range`.
