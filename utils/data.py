@@ -423,6 +423,7 @@ def load_desativacoes_mensais() -> pd.DataFrame:
       WHERE dt_fim_mens IS NOT NULL
         AND CAST(dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
         AND CAST(dt_fim_mens AS DATE) <= LAST_DAY(CURRENT_DATE())
+        AND st_descricao_prd NOT LIKE '%Setup%'
     ),
     renovacoes AS (
       -- (cliente, produto) com dt_fim_mens no último dia do mês
@@ -553,6 +554,7 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
       WHERE dt_fim_mens IS NOT NULL
         AND CAST(dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
         AND CAST(dt_fim_mens AS DATE) <= LAST_DAY(CURRENT_DATE())
+        AND st_descricao_prd NOT LIKE '%Setup%'
         AND {_EXCL_MODULOS.format(col="st_descricao_prd")}
     ),
     renovacoes AS (
@@ -605,6 +607,7 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
       WHERE m.dt_fim_mens IS NOT NULL
         AND CAST(m.dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
         AND CAST(m.dt_fim_mens AS DATE) <= LAST_DAY(CURRENT_DATE())
+        AND m.st_descricao_prd NOT LIKE '%Setup%'
     ),
     renovacoes AS (
       SELECT DISTINCT d.st_sincro_sac, d.st_descricao_prd, d.mes
