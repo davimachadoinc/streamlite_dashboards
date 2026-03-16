@@ -68,6 +68,7 @@ _EXCL_MODULOS = """
     {col} NOT LIKE '%[KIDS]%'
     AND {col} NOT LIKE '%[JORNADA]%'
     AND {col} NOT LIKE '%[LOJAINTELIGENTE]%'
+    AND {col} NOT LIKE '%[LOJAINTELIGENTE_INC]%'
     AND {col} NOT LIKE '%[TOTEM]%'
     AND {col} NOT LIKE '%[V_DEOS]%'
     AND NOT ({col} LIKE '%[STARTER]%' AND {col} LIKE '%Módulo%')
@@ -469,17 +470,57 @@ def load_receita_planos_mensais() -> pd.DataFrame:
     Classifica plano via comp_st_descricao_prd usando o DE-PARA validado.
     """
     query = f"""
+    WITH boleto_plano AS (
+      -- Para cada boleto, identifica o plano base a partir das linhas que não são Reajuste Anual
+      SELECT
+        id_recebimento_recb,
+        MAX(CASE
+          WHEN comp_st_descricao_prd LIKE '%[PRO]%'         THEN 'pro'
+          WHEN comp_st_descricao_prd LIKE '%[LITE]%'        THEN 'lite'
+          WHEN comp_st_descricao_prd LIKE '%[STARTER]%'     THEN 'starter'
+          WHEN comp_st_descricao_prd LIKE '%[FILHA]%'       THEN 'filha'
+          WHEN comp_st_descricao_prd LIKE '%[BASIC]%'       THEN 'basic'
+          WHEN comp_st_descricao_prd LIKE '%0 - 9 Igrejas%' THEN 'pro'
+          WHEN comp_st_descricao_prd LIKE '%10+ Igrejas%'   THEN 'pro'
+          WHEN comp_st_descricao_prd LIKE '%App Lite%'      THEN 'lite'
+          WHEN comp_st_descricao_prd LIKE '%App da Igreja%' THEN 'starter'
+          ELSE NULL
+        END) AS plano_boleto
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+      WHERE comp_st_conta_cont = '1.2.2'
+        AND comp_st_descricao_prd != 'Reajuste Anual'
+        AND {_EXCL_MODULOS.format(col="comp_st_descricao_prd")}
+      GROUP BY 1
+    ),
+    linhas AS (
+      SELECT
+        st_sincro_sac,
+        dt_vencimento_recb,
+        id_recebimento_recb,
+        comp_valor,
+        fl_status_recb,
+        comp_st_descricao_prd,
+        {_PLAN_CASE.format(col="comp_st_descricao_prd")} AS plano_direto
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+      WHERE comp_st_conta_cont = '1.2.2'
+        AND CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+        AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
+        AND {_EXCL_MODULOS.format(col="comp_st_descricao_prd")}
+    )
     SELECT
-      DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH)            AS mes,
-      {_PLAN_CASE.format(col="comp_st_descricao_prd")}               AS plano,
-      COUNT(DISTINCT st_sincro_sac)                                   AS clientes,
-      SUM(comp_valor)                                                 AS receita_emitida,
-      SUM(CASE WHEN fl_status_recb = '1' THEN comp_valor ELSE 0 END) AS receita_liquidada
-    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
-    WHERE comp_st_conta_cont = '1.2.2'
-      AND CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
-      AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
-      AND {_EXCL_MODULOS.format(col="comp_st_descricao_prd")}
+      DATE_TRUNC(CAST(l.dt_vencimento_recb AS DATE), MONTH)            AS mes,
+      CASE
+        WHEN l.comp_st_descricao_prd = 'Reajuste Anual'
+          THEN COALESCE(bp.plano_boleto, 'outros')
+        ELSE l.plano_direto
+      END                                                               AS plano,
+      COUNT(DISTINCT l.st_sincro_sac)                                   AS clientes,
+      SUM(l.comp_valor)                                                 AS receita_emitida,
+      SUM(CASE WHEN l.fl_status_recb = '1' THEN l.comp_valor ELSE 0 END) AS receita_liquidada
+    FROM linhas l
+    LEFT JOIN boleto_plano bp
+      ON l.id_recebimento_recb = bp.id_recebimento_recb
+      AND l.comp_st_descricao_prd = 'Reajuste Anual'
     GROUP BY 1, 2
     ORDER BY 1, 2
     """
