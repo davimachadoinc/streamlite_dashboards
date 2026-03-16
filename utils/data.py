@@ -50,6 +50,7 @@ PLAN_LABELS = {
     "starter": "STARTER",
     "basic":   "BASIC",
     "filha":   "FILHA",
+    "squad":   "Squad as a Service",
     "outros":  "Outros",
 }
 
@@ -59,6 +60,7 @@ PLAN_COLORS = {
     "starter": "#a0a0a0",
     "basic":   "#8ae650",
     "filha":   "#4c4c4c",
+    "squad":   "#f0a500",
     "outros":  "#292929",
 }
 
@@ -86,6 +88,7 @@ _PLAN_CASE = """
       WHEN {col} LIKE '%10+ Igrejas%'    THEN 'pro'
       WHEN {col} LIKE '%App Lite%'        THEN 'lite'
       WHEN {col} LIKE '%App da Igreja%'   THEN 'starter'
+      WHEN {col} LIKE '%Squad as a Service%' THEN 'squad'
       ELSE 'outros'
     END
 """
