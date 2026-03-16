@@ -586,6 +586,67 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=3600)
+def load_desativacoes_detalhado() -> pd.DataFrame:
+    """
+    Desativações no nível de cliente — mês, módulo, plano, nome e MRR perdido.
+    Aplica a mesma lógica de exclusão de renovações.
+    Join com splgc-clientes-inchurch para obter o nome do cliente.
+    """
+    query = f"""
+    WITH desativados AS (
+      SELECT
+        m.st_sincro_sac,
+        m.st_descricao_prd,
+        CAST(m.dt_fim_mens AS DATE)                              AS dt_fim,
+        DATE_TRUNC(CAST(m.dt_fim_mens AS DATE), MONTH)           AS mes,
+        m.valor_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
+      WHERE m.dt_fim_mens IS NOT NULL
+        AND CAST(m.dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+        AND CAST(m.dt_fim_mens AS DATE) <= LAST_DAY(CURRENT_DATE())
+    ),
+    renovacoes AS (
+      SELECT DISTINCT d.st_sincro_sac, d.st_descricao_prd, d.mes
+      FROM desativados d
+      INNER JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` r
+        ON  d.st_sincro_sac    = r.st_sincro_sac
+        AND d.st_descricao_prd = r.st_descricao_prd
+        AND DATE_TRUNC(CAST(r.dt_inicio_mens AS DATE), MONTH) = DATE_ADD(d.mes, INTERVAL 1 MONTH)
+      WHERE d.dt_fim = LAST_DAY(d.dt_fim)
+        AND r.dt_inicio_mens IS NOT NULL
+    )
+    SELECT
+      d.mes,
+      CASE
+        WHEN d.st_descricao_prd LIKE '%[KIDS]%'                THEN 'Kids'
+        WHEN d.st_descricao_prd LIKE '%[JORNADA]%'             THEN 'Jornada'
+        WHEN d.st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'     THEN 'Loja Inteligente'
+        WHEN d.st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%' THEN 'Loja Inteligente'
+        ELSE                                                        'Base'
+      END                                                       AS modulo,
+      {_PLAN_CASE.format(col="d.st_descricao_prd")}            AS plano,
+      d.st_sincro_sac,
+      COALESCE(c.st_nome_sac, d.st_sincro_sac)                 AS nome_cliente,
+      d.st_descricao_prd                                        AS produto,
+      d.valor_total                                             AS mrr_perdido
+    FROM desativados d
+    LEFT JOIN renovacoes rv
+      ON  d.st_sincro_sac    = rv.st_sincro_sac
+      AND d.st_descricao_prd = rv.st_descricao_prd
+      AND d.mes              = rv.mes
+    LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+      ON d.st_sincro_sac = c.st_sincro_sac
+    WHERE rv.st_sincro_sac IS NULL
+    ORDER BY d.mes DESC, d.valor_total DESC
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"]   = pd.to_datetime(df["mes"])
+        df["plano"] = df["plano"].str.upper()
+    return df
+
+
 # ─────────────────────────────────────────────
 # ── PÁGINA 4: INADIMPLÊNCIA ───────────────────
 # ─────────────────────────────────────────────

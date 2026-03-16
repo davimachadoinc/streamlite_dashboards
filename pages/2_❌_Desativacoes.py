@@ -21,6 +21,7 @@ from utils.data import (
     chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data, fmt_brl,
     load_desativacoes_mensais, load_desativacoes_por_plano, load_base_ativa_por_plano,
+    load_desativacoes_detalhado,
 )
 
 inject_css()
@@ -298,14 +299,30 @@ else:
 st.divider()
 
 # ── Tabela detalhada ──────────────────────────
-with st.expander("📋 Tabela Detalhada por Mês e Módulo"):
-    if not df_plot_mod.empty:
-        df_table = (
-            df_plot_mod
-            .assign(modulo=df_plot_mod["modulo"].map(lambda m: MODULE_LABELS.get(m, m)))
-            .pivot_table(index="mes_fmt", columns="modulo", values="mrr_perdido", aggfunc="sum")
-            .round(2).reset_index().rename(columns={"mes_fmt": "Mês"})
-        )
-        st.dataframe(df_table, use_container_width=True, hide_index=True)
-    else:
+with st.expander("📋 Tabela Detalhada por Cliente"):
+    df_det = load_desativacoes_detalhado()
+    df_det = filter_months(df_det, n_months, "mes")
+    if df_det.empty:
         no_data()
+    else:
+        df_show = (
+            df_det
+            .assign(mes=df_det["mes"].dt.strftime("%b/%y").str.capitalize())
+            [["mes", "modulo", "plano", "nome_cliente", "produto", "mrr_perdido"]]
+            .rename(columns={
+                "mes":          "Mês",
+                "modulo":       "Módulo",
+                "plano":        "Plano",
+                "nome_cliente": "Cliente",
+                "produto":      "Produto",
+                "mrr_perdido":  "MRR Perdido (R$)",
+            })
+        )
+        st.dataframe(
+            df_show,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "MRR Perdido (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+            },
+        )
