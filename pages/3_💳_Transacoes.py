@@ -19,7 +19,7 @@ from utils.style import inject_css
 from utils.data import (
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
-    load_transactions_por_metodo,
+    load_transactions_por_metodo, load_transactions_clientes_por_mes,
 )
 
 inject_css()
@@ -47,27 +47,50 @@ with col_filter:
 
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando dados de transações..."):
-    df_raw = load_transactions_por_metodo()
+    df_raw    = load_transactions_por_metodo()
+    df_cli_raw = load_transactions_clientes_por_mes()
 
 if df_raw.empty:
     no_data("Nenhum dado de transação encontrado.")
     st.stop()
 
-# ── Filtro de canal (sidebar) ─────────────────
+# ── Filtros (sidebar) ─────────────────────────
 with st.sidebar:
     st.markdown("### 📡 Canal de Pagamento")
     channels = sorted(df_raw["payment_channel"].dropna().unique().tolist())
     selected_channels = st.multiselect(
         "Filtrar por canal", options=channels, default=channels, key="filter_channels"
     )
+    st.markdown("### 🏷️ Tipo de Transação")
+    tipos = sorted(df_raw["tipo"].dropna().unique().tolist())
+    TIPO_LABELS = {"doacao": "Doação", "outros": "Outros"}
+    selected_tipos = st.multiselect(
+        "Filtrar por tipo",
+        options=tipos,
+        default=tipos,
+        format_func=lambda t: TIPO_LABELS.get(t, t),
+        key="filter_tipos",
+    )
 
 if not selected_channels:
     st.warning("Selecione ao menos um canal.", icon="⚠️")
     st.stop()
+if not selected_tipos:
+    st.warning("Selecione ao menos um tipo.", icon="⚠️")
+    st.stop()
 
 # ── Aplicar filtros ───────────────────────────
-df = df_raw[df_raw["payment_channel"].isin(selected_channels)].copy()
+df = df_raw[
+    df_raw["payment_channel"].isin(selected_channels) &
+    df_raw["tipo"].isin(selected_tipos)
+].copy()
 df = filter_months(df, n_months, "mes")
+
+df_cli = df_cli_raw[
+    df_cli_raw["payment_channel"].isin(selected_channels) &
+    df_cli_raw["tipo"].isin(selected_tipos)
+].copy()
+df_cli = filter_months(df_cli, n_months, "mes")
 
 if df.empty:
     no_data("Nenhuma transação com os filtros selecionados.")
@@ -89,8 +112,15 @@ df_total, x_order_total = mes_fmt_ordered(df_total)
 methods = sorted(df_agg["payment_method"].unique().tolist())
 
 # ── KPI Cards ─────────────────────────────────
+# Clientes por mês (sem dupla contagem por método)
+df_cli_mes = (
+    df_cli.groupby("mes", as_index=False)
+    .agg(clientes=("clientes", "sum"))
+    .sort_values("mes")
+)
+
 st.subheader("Visão Geral do Período")
-k1, k2, k3, k4 = st.columns(4)
+k1, k2, k3, k4, k5 = st.columns(5)
 
 curr_val = last_val(df_total, "total_value", "mes")
 prev_val_ = prev_val(df_total, "total_value", "mes")
@@ -113,7 +143,14 @@ with k3:
               f"R$ {ticket:,.2f}" if ticket else "—",
               delta=delta_str(ticket, prev_tick, fmt="+,.2f", suffix=" R$"))
 
+curr_cli = last_val(df_cli_mes, "clientes", "mes")
+prev_cli = prev_val(df_cli_mes, "clientes", "mes")
 with k4:
+    st.metric("Clientes Transacionando",
+              f"{int(curr_cli):,}" if curr_cli else "—",
+              delta=delta_str(curr_cli, prev_cli))
+
+with k5:
     st.metric("Métodos Ativos", str(len(methods)))
 
 st.divider()
@@ -219,6 +256,61 @@ fig.update_layout(
     xaxis=dict(categoryorder="array", categoryarray=x_order_total, type="category"),
 )
 st.plotly_chart(chart_layout(fig, height=400, legend_bottom=True), use_container_width=True)
+
+st.divider()
+
+# ─────────────────────────────────────────────
+# SEÇÃO 4 — Clientes Transacionando
+# ─────────────────────────────────────────────
+st.subheader("Clientes Transacionando por Mês")
+
+if df_cli_mes.empty:
+    no_data("Sem dados de clientes para o período.")
+else:
+    df_cli_mes_fmt, x_order_cli = mes_fmt_ordered(df_cli_mes)
+
+    col_e, col_f = st.columns(2)
+
+    # Gráfico 4A — Barras de clientes por mês
+    with col_e:
+        st.subheader("Clientes com Transação (por Mês)")
+        fig = go.Figure()
+        fig.add_bar(
+            x=df_cli_mes_fmt["mes_fmt"], y=df_cli_mes_fmt["clientes"],
+            name="Clientes", marker_color=PALETTE[0],
+        )
+        fig.update_layout(
+            xaxis=dict(categoryorder="array", categoryarray=x_order_cli, type="category"),
+        )
+        st.plotly_chart(chart_layout(fig, height=360), use_container_width=True)
+
+    # Gráfico 4B — Clientes por tipo (doacao vs outros), se ambos selecionados
+    with col_f:
+        st.subheader("Clientes por Tipo de Transação")
+        df_cli_tipo = (
+            df_cli.groupby(["mes", "tipo"], as_index=False)
+            .agg(clientes=("clientes", "sum"))
+        )
+        TIPO_COLORS = {"doacao": PALETTE[0], "outros": PALETTE[3]}
+        if df_cli_tipo.empty:
+            no_data()
+        else:
+            df_cli_tipo_fmt, x_order_ct = mes_fmt_ordered(df_cli_tipo)
+            fig = go.Figure()
+            for t in sorted(df_cli_tipo_fmt["tipo"].unique()):
+                sub = df_cli_tipo_fmt[df_cli_tipo_fmt["tipo"] == t].sort_values("mes")
+                fig.add_bar(
+                    x=sub["mes_fmt"], y=sub["clientes"],
+                    name=TIPO_LABELS.get(t, t),
+                    marker_color=TIPO_COLORS.get(t, PALETTE[3]),
+                )
+            fig.update_layout(
+                barmode="group",
+                xaxis=dict(categoryorder="array", categoryarray=x_order_ct, type="category"),
+            )
+            st.plotly_chart(chart_layout(fig, height=360, legend_bottom=True), use_container_width=True)
+
+st.divider()
 
 # ── Tabela detalhada ──────────────────────────
 with st.expander("📋 Tabela Detalhada por Mês e Método"):

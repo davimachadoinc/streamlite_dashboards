@@ -370,24 +370,29 @@ def load_receita_modulos_mensais() -> pd.DataFrame:
 @st.cache_data(ttl=3600)
 def load_transactions_por_metodo() -> pd.DataFrame:
     """
-    Soma de value por método de pagamento e mês (últimos 15 meses).
+    Soma de value por método de pagamento, canal, tipo (doacao/outros) e mês (últimos 15 meses).
     Status: active ou payed.
     Métodos excluídos: free (valor zero), external (valor zero), debit (volume residual).
+    tipo = 'doacao' quando id da transação está em view_donation.transaction_ptr_id.
     """
     query = """
     SELECT
-      DATE_TRUNC(CAST(datetime AS DATE), MONTH) AS mes,
-      method                                    AS payment_method,
-      payment_channel,
-      SUM(value)                                AS total_value,
-      COUNT(*)                                  AS qtd_transacoes
-    FROM `inchurch-gcp.backend_bi.view_transaction`
+      DATE_TRUNC(CAST(t.datetime AS DATE), MONTH)                       AS mes,
+      t.method                                                           AS payment_method,
+      t.payment_channel,
+      CASE WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
+           ELSE 'outros' END                                             AS tipo,
+      SUM(t.value)                                                       AS total_value,
+      COUNT(*)                                                           AS qtd_transacoes
+    FROM `inchurch-gcp.backend_bi.view_transaction` t
+    LEFT JOIN `inchurch-gcp.backend_bi.view_donation` d
+           ON d.transaction_ptr_id = t.id
     WHERE
-      status IN ('active', 'payed')
-      AND method NOT IN ('free', 'external', 'debit')
-      AND CAST(datetime AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
-      AND CAST(datetime AS DATE) <= LAST_DAY(CURRENT_DATE())
-    GROUP BY 1, 2, 3
+      t.status IN ('active', 'payed')
+      AND t.method NOT IN ('free', 'external', 'debit')
+      AND CAST(t.datetime AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(t.datetime AS DATE) <= LAST_DAY(CURRENT_DATE())
+    GROUP BY 1, 2, 3, 4
     ORDER BY 1, 2
     """
     df = _bq_query(query, "bigquery_tech")
@@ -395,6 +400,39 @@ def load_transactions_por_metodo() -> pd.DataFrame:
         df["mes"]             = pd.to_datetime(df["mes"])
         df["payment_method"]  = df["payment_method"].fillna("Não informado")
         df["payment_channel"] = df["payment_channel"].fillna("Não informado")
+        df["tipo"]            = df["tipo"].fillna("outros")
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_transactions_clientes_por_mes() -> pd.DataFrame:
+    """
+    Clientes únicos (tertiarygroup_id) transacionando por mês, canal e tipo (doacao/outros).
+    Agrupa sem quebrar por método para evitar dupla contagem no gráfico de clientes.
+    """
+    query = """
+    SELECT
+      DATE_TRUNC(CAST(t.datetime AS DATE), MONTH)                       AS mes,
+      t.payment_channel,
+      CASE WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
+           ELSE 'outros' END                                             AS tipo,
+      COUNT(DISTINCT t.tertiarygroup_id)                                 AS clientes
+    FROM `inchurch-gcp.backend_bi.view_transaction` t
+    LEFT JOIN `inchurch-gcp.backend_bi.view_donation` d
+           ON d.transaction_ptr_id = t.id
+    WHERE
+      t.status IN ('active', 'payed')
+      AND t.method NOT IN ('free', 'external', 'debit')
+      AND CAST(t.datetime AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(t.datetime AS DATE) <= LAST_DAY(CURRENT_DATE())
+    GROUP BY 1, 2, 3
+    ORDER BY 1
+    """
+    df = _bq_query(query, "bigquery_tech")
+    if not df.empty:
+        df["mes"]             = pd.to_datetime(df["mes"])
+        df["payment_channel"] = df["payment_channel"].fillna("Não informado")
+        df["tipo"]            = df["tipo"].fillna("outros")
     return df
 
 
