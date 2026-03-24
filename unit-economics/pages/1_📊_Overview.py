@@ -86,7 +86,7 @@ else:
     )
     fig.add_bar(
         x=df_plot["mes_fmt"], y=df_plot["expansion_mrr"],
-        name="Expansion", marker_color="#3b82f6",
+        name="Expansion", marker_color=PALETTE[3],
         hovertemplate="<b>Expansion</b><br>R$ %{y:,.0f}<extra></extra>",
     )
     fig.add_bar(
@@ -146,7 +146,7 @@ else:
     df_var = df_var.sort_values("mes")
     df_var["mrr_delta"] = df_var["mrr_fim"].diff()
 
-    delta_colors = ["#3b82f6" if v >= 0 else PALETTE[9]
+    delta_colors = [PALETTE[3] if v >= 0 else PALETTE[9]
                     for v in df_var["mrr_delta"].fillna(0)]
 
     fig = go.Figure()
