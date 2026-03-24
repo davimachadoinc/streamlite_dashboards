@@ -38,11 +38,19 @@ with st.spinner("Carregando dados..."):
     df_new_plan = load_new_logos_por_plano()
     df_desp     = load_despesas_cac()
 
+_current_month = pd.Timestamp.now().to_period("M").to_timestamp()
+
 df_wf_f       = filter_months(df_wf, n_months)
 df_new_plan_f = filter_months(df_new_plan, n_months)
 df_desp_f     = filter_months(df_desp, n_months)
 df_cac        = compute_cac_metrics(df_desp, df_wf)
 df_cac_f      = filter_months(df_cac, n_months)
+
+# Remove meses futuros
+df_wf_f       = df_wf_f[df_wf_f["mes"] <= _current_month]
+df_new_plan_f = df_new_plan_f[df_new_plan_f["mes"] <= _current_month]
+df_desp_f     = df_desp_f[df_desp_f["mes"] <= _current_month]
+df_cac_f      = df_cac_f[df_cac_f["mes"] <= _current_month]
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 st.subheader("Métricas de Aquisição")
@@ -93,6 +101,16 @@ with col_a:
                 marker_color=PLAN_COLORS.get(plano, PALETTE[3]),
                 hovertemplate=f"<b>{PLAN_LABELS.get(plano, plano)}</b><br>%{{y}} clientes<extra></extra>",
             )
+        # Linha com total por mês
+        total_por_mes = df_plot.groupby("mes_fmt", sort=False)["new_clients"].sum().reset_index()
+        total_por_mes = total_por_mes.set_index("mes_fmt").reindex(x_order).reset_index()
+        fig.add_scatter(
+            x=total_por_mes["mes_fmt"], y=total_por_mes["new_clients"],
+            name="Total", mode="lines+markers",
+            line=dict(color=PALETTE[1], width=2),
+            marker=dict(size=7),
+            hovertemplate="<b>Total</b> %{y} clientes<extra></extra>",
+        )
         fig.update_layout(
             barmode="stack",
             xaxis=dict(categoryorder="array", categoryarray=x_order, type="category"),

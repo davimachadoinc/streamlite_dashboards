@@ -86,7 +86,7 @@ else:
     )
     fig.add_bar(
         x=df_plot["mes_fmt"], y=df_plot["expansion_mrr"],
-        name="Expansion", marker_color=PALETTE[6],
+        name="Expansion", marker_color="#3b82f6",
         hovertemplate="<b>Expansion</b><br>R$ %{y:,.0f}<extra></extra>",
     )
     fig.add_bar(
@@ -94,6 +94,15 @@ else:
         name="Churn", marker_color=PALETTE[9],
         hovertemplate="<b>Churn</b><br>R$ %{customdata:,.0f}<extra></extra>",
         customdata=df_plot["churned_mrr"],
+    )
+    # MRR net como linha no eixo primário
+    mrr_net = df_plot["new_logo_mrr"] + df_plot["expansion_mrr"] - df_plot["churned_mrr"]
+    fig.add_scatter(
+        x=df_plot["mes_fmt"], y=mrr_net,
+        name="MRR Net", mode="lines+markers",
+        line=dict(color=PALETTE[8], width=2),
+        marker=dict(size=6),
+        hovertemplate="<b>MRR Net</b><br>R$ %{y:,.0f}<extra></extra>",
     )
     # NRR como linha no eixo secundário
     fig.add_scatter(
@@ -124,6 +133,41 @@ else:
         xaxis=dict(categoryorder="array", categoryarray=x_order, type="category"),
     )
     st.plotly_chart(chart_layout(fig, height=420, legend_bottom=True), use_container_width=True)
+
+st.divider()
+
+# ── Gráfico 1b: Variação mensal do MRR ───────────────────────────────────────
+st.subheader("Variação Mensal do MRR")
+
+if df_wf_f.empty:
+    no_data()
+else:
+    df_var, x_order_var = mes_fmt_ordered(df_wf_f)
+    df_var = df_var.sort_values("mes")
+    df_var["mrr_delta"] = df_var["mrr_fim"].diff()
+
+    delta_colors = ["#3b82f6" if v >= 0 else PALETTE[9]
+                    for v in df_var["mrr_delta"].fillna(0)]
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=df_var["mes_fmt"], y=df_var["mrr_delta"],
+        name="Δ MRR", marker_color=delta_colors,
+        hovertemplate="<b>Variação</b><br>R$ %{y:,.0f}<extra></extra>",
+    )
+    fig.add_scatter(
+        x=df_var["mes_fmt"], y=df_var["mrr_fim"],
+        name="MRR Total", mode="lines+markers",
+        line=dict(color=PALETTE[0], width=2, dash="dot"),
+        marker=dict(size=5),
+        yaxis="y2",
+        hovertemplate="<b>MRR</b> R$ %{y:,.0f}<extra></extra>",
+    )
+    fig.update_layout(
+        yaxis2=dict(overlaying="y", side="right", showgrid=False, color=PALETTE[0]),
+        xaxis=dict(categoryorder="array", categoryarray=x_order_var, type="category"),
+    )
+    st.plotly_chart(chart_layout(fig, height=320, legend_bottom=True), use_container_width=True)
 
 st.divider()
 

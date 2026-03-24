@@ -22,6 +22,7 @@ from utils.data import (
     last_val, prev_val, delta_str, fmt_brl, no_data,
     load_mrr_waterfall, load_expansion_por_modulo,
     load_module_attach_rate, load_upsell_timing,
+    load_expansion_detalhado,
 )
 
 inject_css()
@@ -39,10 +40,19 @@ with st.spinner("Carregando dados..."):
     df_exp_mod = load_expansion_por_modulo()
     df_attach  = load_module_attach_rate()
     df_timing  = load_upsell_timing()
+    df_exp_det = load_expansion_detalhado()
+
+_current_month = pd.Timestamp.now().to_period("M").to_timestamp()
 
 df_wf_f      = filter_months(df_wf, n_months)
 df_exp_mod_f = filter_months(df_exp_mod, n_months)
 df_attach_f  = filter_months(df_attach, n_months)
+
+# Remove meses futuros
+df_wf_f      = df_wf_f[df_wf_f["mes"] <= _current_month]
+df_exp_mod_f = df_exp_mod_f[df_exp_mod_f["mes"] <= _current_month]
+df_attach_f  = df_attach_f[df_attach_f["mes"] <= _current_month]
+df_exp_det_f = df_exp_det[df_exp_det["mes"] <= _current_month]
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 st.subheader("Métricas de Expansão")
@@ -236,4 +246,21 @@ with st.expander("📋 Tabela de Expansion MRR por Módulo"):
             "clientes":      "Clientes",
         })
         st.dataframe(df_show, use_container_width=True, hide_index=True,
+                     column_config={"Expansion MRR": st.column_config.NumberColumn(format="R$ %,.0f")})
+
+with st.expander("🔍 Clientes com Maior Expansion (últimos 6 meses)"):
+    if df_exp_det_f.empty:
+        no_data()
+    else:
+        df_det = df_exp_det_f.sort_values(["mes", "expansion_mrr"], ascending=[False, False]).copy()
+        df_det["mes"] = df_det["mes"].dt.strftime("%b/%y").str.capitalize()
+        df_det["tipo"] = df_det["tipo"].map(MODULE_LABELS).fillna(df_det["tipo"])
+        df_det = df_det.rename(columns={
+            "mes":           "Mês",
+            "cliente_id":    "ID Cliente",
+            "produto":       "Produto",
+            "expansion_mrr": "Expansion MRR",
+            "tipo":          "Tipo",
+        })
+        st.dataframe(df_det, use_container_width=True, hide_index=True,
                      column_config={"Expansion MRR": st.column_config.NumberColumn(format="R$ %,.0f")})

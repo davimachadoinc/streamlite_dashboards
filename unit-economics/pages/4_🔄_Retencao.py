@@ -37,9 +37,16 @@ with st.spinner("Carregando dados..."):
     df_churn = load_churn_por_plano()
     df_base  = load_base_ativa_por_plano()
 
+_current_month = pd.Timestamp.now().to_period("M").to_timestamp()
+
 df_wf_f    = filter_months(df_wf, n_months)
 df_churn_f = filter_months(df_churn, n_months)
 df_base_f  = filter_months(df_base, n_months)
+
+# Remove meses futuros
+df_wf_f    = df_wf_f[df_wf_f["mes"] <= _current_month]
+df_churn_f = df_churn_f[df_churn_f["mes"] <= _current_month]
+df_base_f  = df_base_f[df_base_f["mes"] <= _current_month]
 
 # ── Churn rate consolidado por mês (join churn + base) ───────────────────────
 df_churn_agg = df_churn_f.groupby("mes", as_index=False).agg(

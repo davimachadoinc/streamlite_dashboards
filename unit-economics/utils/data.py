@@ -613,6 +613,70 @@ def load_expansion_por_modulo() -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────
+# QUERY 4b — EXPANSION DETALHADO (drill-down)
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def load_expansion_detalhado() -> pd.DataFrame:
+    """Expansion por cliente e produto — últimos 6 meses, sem agregar."""
+    query = """
+    WITH
+    primeiro_inicio AS (
+      SELECT st_sincro_sac, MIN(CAST(dt_inicio_mens AS DATE)) AS dt_first
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+      GROUP BY 1
+    ),
+    expansao_raw AS (
+      SELECT
+        m.st_sincro_sac,
+        m.st_descricao_prd,
+        CAST(m.dt_inicio_mens AS DATE)                           AS dt_inicio,
+        DATE_TRUNC(CAST(m.dt_inicio_mens AS DATE), MONTH)        AS mes,
+        m.valor_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
+      JOIN primeiro_inicio p ON m.st_sincro_sac = p.st_sincro_sac
+      WHERE CAST(m.dt_inicio_mens AS DATE) > p.dt_first
+        AND m.st_descricao_prd NOT LIKE '%Setup%'
+        AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND CAST(m.dt_inicio_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 5 MONTH)
+    ),
+    renovacoes_exp AS (
+      SELECT DISTINCT e.st_sincro_sac, e.st_descricao_prd, e.mes
+      FROM expansao_raw e
+      INNER JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` prev
+        ON e.st_sincro_sac     = prev.st_sincro_sac
+        AND e.st_descricao_prd  = prev.st_descricao_prd
+        AND CAST(prev.dt_fim_mens AS DATE) = LAST_DAY(CAST(prev.dt_fim_mens AS DATE))
+        AND DATE_TRUNC(CAST(prev.dt_fim_mens AS DATE), MONTH) = DATE_SUB(e.mes, INTERVAL 1 MONTH)
+    )
+    SELECT
+      e.mes,
+      e.st_sincro_sac                                           AS cliente_id,
+      e.st_descricao_prd                                        AS produto,
+      e.valor_total                                             AS expansion_mrr,
+      CASE
+        WHEN e.st_descricao_prd LIKE '%[KIDS]%'                THEN 'kids'
+        WHEN e.st_descricao_prd LIKE '%[JORNADA]%'             THEN 'jornada'
+        WHEN e.st_descricao_prd LIKE '%[LOJAINTELIGENTE]%'     THEN 'loja_inteligente'
+        WHEN e.st_descricao_prd LIKE '%[LOJAINTELIGENTE_INC]%' THEN 'loja_inteligente'
+        WHEN e.st_descricao_prd LIKE '%[TOTEM]%'               THEN 'totem'
+        ELSE 'upgrade_plano'
+      END                                                       AS tipo
+    FROM expansao_raw e
+    LEFT JOIN renovacoes_exp r
+      ON e.st_sincro_sac = r.st_sincro_sac AND e.st_descricao_prd = r.st_descricao_prd AND e.mes = r.mes
+    WHERE r.st_sincro_sac IS NULL
+    ORDER BY e.mes DESC, e.valor_total DESC
+    """
+    df = _query_bi(query)
+    if not df.empty:
+        df["mes"]  = pd.to_datetime(df["mes"])
+        df["tipo"] = df["tipo"].str.lower()
+    return df
+
+
+# ─────────────────────────────────────────────
 # QUERY 5 — CHURN POR PLANO
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=3600)
