@@ -1,5 +1,3 @@
-import json
-
 import pandas as pd
 import requests
 import streamlit as st
@@ -8,12 +6,11 @@ from googleapiclient.discovery import build
 
 # Configuração da API do Google Sheets
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-credential_json = st.secrets["credentials"]
-CREDENTIALS = json.loads(credential_json)
 SPREADSHEET_ID = '1n-VTjTz90GBmtmLU8cxYtBtmTwn234NZT7UKFkl6eqY'
 
 # Autenticação e criação do serviço
-creds = Credentials.from_service_account_info(CREDENTIALS, scopes=SCOPES)
+creds = Credentials.from_service_account_info(
+    dict(st.secrets["gcp_service_account"]), scopes=SCOPES)
 service = build('sheets', 'v4', credentials=creds)
 
 
