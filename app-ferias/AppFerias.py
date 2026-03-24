@@ -68,6 +68,9 @@ def escrever_dados(nome_aba, intervalo, valores):
 
 # Carregar dados marcações
 marcados = ler_dados("Marcações", "A1:P400")
+if not marcados:
+    st.error("Sem acesso à planilha. Verifique se a service account tem permissão de Editor.")
+    st.stop()
 marcacoes = pd.DataFrame(marcados[1:], columns=marcados[0])
 # Filtrar coluna O (Validado) para mostrar apenas as marcações que não foram reprovadas # noqa
 marcacoes_validas = marcacoes[marcacoes["Validado por DP"] != "Reprovado"]
@@ -80,6 +83,9 @@ marcacoes_validas = marcacoes_validas[marcacoes_validas["ID"] != ""]
 
 # Carregar dados iniciais
 dados_principal = ler_dados('colaboradores', 'A1:L400')
+if not dados_principal:
+    st.error("Sem acesso à planilha. Verifique se a service account tem permissão de Editor.")
+    st.stop()
 principal = pd.DataFrame(dados_principal[1:], columns=dados_principal[0])
 # Garantir que o contrato esteja ativo
 principal = principal[principal['Situação do Contrato'] == 'ATIVO']
