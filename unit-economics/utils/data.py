@@ -335,7 +335,7 @@ def load_mrr_waterfall() -> pd.DataFrame:
       FROM meses cal
       CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
       WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
-        AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= cal.mes)
+        AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= DATE_SUB(cal.mes, INTERVAL 1 DAY))
         AND mrr.st_descricao_prd NOT LIKE '%Setup%'
         AND mrr.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
       GROUP BY 1
@@ -492,7 +492,7 @@ def load_mrr_por_plano() -> pd.DataFrame:
     ) cal
     CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
     WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
-      AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= cal.mes)
+      AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= DATE_SUB(cal.mes, INTERVAL 1 DAY))
       AND mrr.st_descricao_prd NOT LIKE '%Setup%'
       AND mrr.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
       AND {_EXCL_MODULOS.format(col="mrr.st_descricao_prd")}
@@ -760,7 +760,7 @@ def load_base_ativa_por_plano() -> pd.DataFrame:
     ) cal
     CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
     WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
-      AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= cal.mes)
+      AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= DATE_SUB(cal.mes, INTERVAL 1 DAY))
       AND mrr.st_descricao_prd NOT LIKE '%Setup%'
       AND mrr.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
       AND {_EXCL_MODULOS.format(col="mrr.st_descricao_prd")}
@@ -797,7 +797,7 @@ def load_module_attach_rate() -> pd.DataFrame:
       FROM meses cal
       CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
       WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
-        AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= cal.mes)
+        AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= DATE_SUB(cal.mes, INTERVAL 1 DAY))
         AND mrr.st_descricao_prd NOT LIKE '%Setup%'
         AND mrr.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND mrr.st_descricao_prd NOT LIKE '%[KIDS]%'
@@ -821,7 +821,7 @@ def load_module_attach_rate() -> pd.DataFrame:
       FROM meses cal
       CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
       WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
-        AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= cal.mes)
+        AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= DATE_SUB(cal.mes, INTERVAL 1 DAY))
         AND (
           mrr.st_descricao_prd LIKE '%[KIDS]%'
           OR mrr.st_descricao_prd LIKE '%[JORNADA]%'
