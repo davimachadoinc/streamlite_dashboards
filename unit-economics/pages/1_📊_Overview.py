@@ -100,7 +100,7 @@ else:
     fig.add_scatter(
         x=df_plot["mes_fmt"], y=mrr_net,
         name="MRR Net", mode="lines+markers",
-        line=dict(color=PALETTE[8], width=2),
+        line=dict(color=PALETTE[0], width=2),
         marker=dict(size=6),
         hovertemplate="<b>MRR Net</b><br>R$ %{y:,.0f}<extra></extra>",
     )
@@ -158,13 +158,13 @@ else:
     fig.add_scatter(
         x=df_var["mes_fmt"], y=df_var["mrr_fim"],
         name="MRR Total", mode="lines+markers",
-        line=dict(color=PALETTE[0], width=2, dash="dot"),
+        line=dict(color=PALETTE[1], width=2, dash="dot"),
         marker=dict(size=5),
         yaxis="y2",
         hovertemplate="<b>MRR</b> R$ %{y:,.0f}<extra></extra>",
     )
     fig.update_layout(
-        yaxis2=dict(overlaying="y", side="right", showgrid=False, color=PALETTE[0]),
+        yaxis2=dict(overlaying="y", side="right", showgrid=False, color=PALETTE[1]),
         xaxis=dict(categoryorder="array", categoryarray=x_order_var, type="category"),
     )
     st.plotly_chart(chart_layout(fig, height=320, legend_bottom=True), use_container_width=True)
