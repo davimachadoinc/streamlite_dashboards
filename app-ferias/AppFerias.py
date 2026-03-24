@@ -4,6 +4,15 @@ import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
+# ── Login obrigatório antes de qualquer outra coisa ──────────────────────────
+st.logo("https://inchurch.com.br/wp-content/uploads/2024/09/inchurch-logo-svg.svg")  # noqa
+st.title("Gerenciamento de Férias")
+
+if not st.user.is_logged_in:
+    st.info("Faça login com sua conta Google @inchurch.com.br para continuar.")
+    st.login()
+    st.stop()
+
 # Configuração da API do Google Sheets
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SPREADSHEET_ID = '1n-VTjTz90GBmtmLU8cxYtBtmTwn234NZT7UKFkl6eqY'
@@ -410,20 +419,11 @@ def marcar_ferias():
                 chats_channel(f"Erro ao marcar férias: {e}. Marcador {email_input}")  # noqa
 
 
-# Interface Streamlit
-st.logo("https://inchurch.com.br/wp-content/uploads/2024/09/inchurch-logo-svg.svg")  # noqa
-st.title("Gerenciamento de Férias")
-
-if not st.user.is_logged_in:
-    st.info("Faça login com sua conta Google @inchurch.com.br para continuar.")
-    st.login()
-    st.stop()
-
+# ── Verificar se email tem acesso ────────────────────────────────────────────
 email_input = st.user.email.lower()
 emails = principal["Email Corporativo"].tolist()
 if email_input not in emails:
     st.error(f"O email **{email_input}** não tem acesso a este app. Entre em contato com o DP.")
-    st.logout()
     st.stop()
 
 nome_marcador = principal[principal["Email Corporativo"]
