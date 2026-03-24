@@ -146,7 +146,7 @@ else:
     df_var = df_var.sort_values("mes")
     df_var["mrr_delta"] = df_var["mrr_fim"].diff()
 
-    delta_colors = [PALETTE[3] if v >= 0 else PALETTE[9]
+    delta_colors = [PALETTE[0] if v >= 0 else PALETTE[9]
                     for v in df_var["mrr_delta"].fillna(0)]
 
     fig = go.Figure()
