@@ -95,15 +95,6 @@ else:
         hovertemplate="<b>Churn</b><br>R$ %{customdata:,.0f}<extra></extra>",
         customdata=df_plot["churned_mrr"],
     )
-    # MRR net como linha no eixo primário
-    mrr_net = df_plot["new_logo_mrr"] + df_plot["expansion_mrr"] - df_plot["churned_mrr"]
-    fig.add_scatter(
-        x=df_plot["mes_fmt"], y=mrr_net,
-        name="MRR Net", mode="lines+markers",
-        line=dict(color=PALETTE[0], width=2),
-        marker=dict(size=6),
-        hovertemplate="<b>MRR Net</b><br>R$ %{y:,.0f}<extra></extra>",
-    )
     # NRR como linha no eixo secundário
     fig.add_scatter(
         x=df_plot["mes_fmt"], y=df_plot["nrr"],
