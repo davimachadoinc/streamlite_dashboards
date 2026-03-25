@@ -22,16 +22,27 @@ if not st.user.is_logged_in:
     st.login()
     st.stop()
 
+# Garante que o email esteja disponível antes de continuar
+if not st.user.email:
+    st.warning("Autenticação em andamento, aguarde...")
+    st.stop()
+
 # ── Google Sheets ──────────────────────────────────────────────────────────────
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SPREADSHEET_ID = '1n-VTjTz90GBmtmLU8cxYtBtmTwn234NZT7UKFkl6eqY'
 
 try:
-    creds = Credentials.from_service_account_info(
-        dict(st.secrets["gcp_service_account"]), scopes=SCOPES)
+    gcp_secret = dict(st.secrets["gcp_service_account"])
+except KeyError:
+    st.error("❌ Chave 'gcp_service_account' não encontrada nos secrets. Verifique a configuração no Streamlit Cloud.")
+    st.info("Os secrets devem conter uma seção [gcp_service_account] com os campos da service account.")
+    st.stop()
+
+try:
+    creds = Credentials.from_service_account_info(gcp_secret, scopes=SCOPES)
     service = build('sheets', 'v4', credentials=creds)
 except Exception as e:
-    st.error(f"Erro ao carregar credenciais do Google Sheets: {e}")
+    st.error(f"❌ Erro ao carregar credenciais do Google Sheets: {e}")
     st.stop()
 
 
@@ -96,11 +107,14 @@ principal = principal[principal['Situação do Contrato'] == 'ATIVO']
 st.logo("https://inchurch.com.br/wp-content/uploads/2024/09/inchurch-logo-svg.svg")
 st.title("Gerenciamento de Férias")
 
-email_input = st.user.email.lower()
-emails = principal["Email Corporativo"].tolist()
+email_input = st.user.email.lower().strip()
+emails = [e.lower().strip() for e in principal["Email Corporativo"].tolist()]
 if email_input not in emails:
     st.error(f"O email **{email_input}** não tem acesso a este app. Entre em contato com o DP.")
     st.stop()
+
+# Reindexar com email normalizado para o lookup
+principal["Email Corporativo"] = principal["Email Corporativo"].str.lower().str.strip()
 
 nome_marcador = principal[principal["Email Corporativo"] == email_input]["Nome Completo"].values[0]
 
