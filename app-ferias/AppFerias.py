@@ -13,14 +13,20 @@ if not st.user.is_logged_in:
     st.login()
     st.stop()
 
+# Debug temporário — remover após resolver o loop
+st.write(f"✅ Logado como: `{st.user.email}`")
+
 # Configuração da API do Google Sheets
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SPREADSHEET_ID = '1n-VTjTz90GBmtmLU8cxYtBtmTwn234NZT7UKFkl6eqY'
 
-# Autenticação e criação do serviço
-creds = Credentials.from_service_account_info(
-    dict(st.secrets["gcp_service_account"]), scopes=SCOPES)
-service = build('sheets', 'v4', credentials=creds)
+try:
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]), scopes=SCOPES)
+    service = build('sheets', 'v4', credentials=creds)
+except Exception as e:
+    st.error(f"Erro ao carregar credenciais do Google Sheets: {e}")
+    st.stop()
 
 
 def chats_people(message, email):
