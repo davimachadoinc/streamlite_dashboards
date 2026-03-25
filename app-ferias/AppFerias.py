@@ -440,8 +440,9 @@ with st.sidebar:
     st.logout()
 
 # Mostrar opções de "Consultar Férias" ou "Marcar Novas Férias"
-opcao = st.radio("O que você deseja fazer?", [
-                 "Consultar Férias", "Marcar Novas Férias ou Alterar Férias Marcadas"])  # noqa
+try:
+    opcao = st.radio("O que você deseja fazer?", [
+                     "Consultar Férias", "Marcar Novas Férias ou Alterar Férias Marcadas"])  # noqa
 
 if opcao == "Consultar Férias":
     # Seleção do Time
@@ -686,3 +687,8 @@ if opcao == "Marcar Novas Férias ou Alterar Férias Marcadas":
 
         else:
             marcar_ferias()
+
+except Exception as _e:
+    import traceback
+    st.error(f"**Erro inesperado:** {_e}")
+    st.code(traceback.format_exc())
