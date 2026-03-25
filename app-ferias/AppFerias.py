@@ -1,8 +1,17 @@
+import sys
+import traceback
+
 import pandas as pd
 import requests
 import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+
+def _handle_exception(exc_type, exc_value, exc_tb):
+    st.error(f"**Erro inesperado:** {exc_value}")
+    st.code("".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+
+sys.excepthook = _handle_exception
 
 # ── Login obrigatório antes de qualquer outra coisa ──────────────────────────
 st.logo("https://inchurch.com.br/wp-content/uploads/2024/09/inchurch-logo-svg.svg")  # noqa
@@ -440,9 +449,8 @@ with st.sidebar:
     st.logout()
 
 # Mostrar opções de "Consultar Férias" ou "Marcar Novas Férias"
-try:
-    opcao = st.radio("O que você deseja fazer?", [
-                     "Consultar Férias", "Marcar Novas Férias ou Alterar Férias Marcadas"])  # noqa
+opcao = st.radio("O que você deseja fazer?", [
+                 "Consultar Férias", "Marcar Novas Férias ou Alterar Férias Marcadas"])  # noqa
 
 if opcao == "Consultar Férias":
     # Seleção do Time
@@ -687,8 +695,3 @@ if opcao == "Marcar Novas Férias ou Alterar Férias Marcadas":
 
         else:
             marcar_ferias()
-
-except Exception as _e:
-    import traceback
-    st.error(f"**Erro inesperado:** {_e}")
-    st.code(traceback.format_exc())
