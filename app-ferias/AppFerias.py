@@ -1,7 +1,6 @@
 import pandas as pd
 import requests
 import streamlit as st
-from authlib.integrations.requests_client import OAuth2Session
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -11,48 +10,25 @@ st.set_page_config(
     layout="wide"
 )
 
-# ── OAuth config ───────────────────────────────────────────────────────────────
-CLIENT_ID = st.secrets["auth"]["client_id"]
-CLIENT_SECRET = st.secrets["auth"]["client_secret"]
-REDIRECT_URI = "https://marcacao-ferias-inc.streamlit.app"
-AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
-USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-
-
-def get_auth_url():
-    client = OAuth2Session(CLIENT_ID, scope="openid email profile", redirect_uri=REDIRECT_URI)
-    url, _ = client.create_authorization_url(AUTH_URL, prompt="select_account")
-    return url
-
-
-# ── Processar callback OAuth ───────────────────────────────────────────────────
-if "code" in st.query_params and "authenticated_email" not in st.session_state:
-    try:
-        client = OAuth2Session(CLIENT_ID, CLIENT_SECRET, redirect_uri=REDIRECT_URI)
-        client.fetch_token(TOKEN_URL, code=st.query_params["code"], grant_type="authorization_code")
-        userinfo = client.get(USERINFO_URL).json()
-        st.session_state["authenticated_email"] = userinfo["email"].lower().strip()
-        st.query_params.clear()
-        st.rerun()
-    except Exception as e:
-        st.error(f"Erro no processo de login: {e}")
-        st.link_button("Tentar novamente", get_auth_url())
-        st.stop()
-
-# ── Página de login ────────────────────────────────────────────────────────────
-if "authenticated_email" not in st.session_state:
-    st.image(
-        "https://inchurch.com.br/wp-content/uploads/2024/09/inchurch-logo-svg.svg",
-        width=240
-    )
-    st.title("Gerenciamento de Férias")
-    st.markdown("---")
-    st.write("Faça login com sua conta Google **@inchurch.com.br** para acessar o sistema.")
-    st.link_button("Entrar com Google", get_auth_url())
+# ── Auth ───────────────────────────────────────────────────────────────────────
+if not st.user.is_logged_in:
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        st.image(
+            "https://inchurch.com.br/wp-content/uploads/2024/09/inchurch-logo-svg.svg",
+            width=240
+        )
+        st.title("Gerenciamento de Férias")
+        st.markdown("---")
+        st.write("Faça login com sua conta Google **@inchurch.com.br** para acessar o sistema.")
+        if st.button("🔐 Entrar com Google", use_container_width=True):
+            st.login()
     st.stop()
 
-# ── Usuário autenticado — Google Sheets ───────────────────────────────────────
+user_email = st.user.email.lower().strip()
+user_name  = getattr(st.user, "name", user_email)
+
+# ── Google Sheets ──────────────────────────────────────────────────────────────
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SPREADSHEET_ID = '1n-VTjTz90GBmtmLU8cxYtBtmTwn234NZT7UKFkl6eqY'
 
@@ -130,22 +106,27 @@ principal["Email Corporativo"] = principal["Email Corporativo"].str.lower().str.
 st.logo("https://inchurch.com.br/wp-content/uploads/2024/09/inchurch-logo-svg.svg")
 st.title("Gerenciamento de Férias")
 
-email_input = st.session_state["authenticated_email"]
+email_input = user_email
 emails = principal["Email Corporativo"].tolist()
 if email_input not in emails:
-    st.error(f"O email **{email_input}** não tem acesso a este app. Entre em contato com o DP.")
-    if st.button("Sair"):
-        del st.session_state["authenticated_email"]
-        st.rerun()
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        st.error(f"❌ O e-mail **{email_input}** não tem acesso a este app.\n\nEntre em contato com o DP.")
+        if st.button("↩️ Sair", use_container_width=True):
+            st.logout()
     st.stop()
 
 nome_marcador = principal[principal["Email Corporativo"] == email_input]["Nome Completo"].values[0]
 
 with st.sidebar:
-    st.write(f"Logado como **{nome_marcador}**")
-    if st.button("Sair"):
-        del st.session_state["authenticated_email"]
-        st.rerun()
+    st.markdown(
+        f"<p style='color:#a0a0a0; font-size:0.82rem; margin-bottom:2px;'>👤 {user_name}</p>"
+        f"<p style='color:#4c4c4c; font-size:0.75rem; margin-bottom:16px;'>{user_email}</p>",
+        unsafe_allow_html=True,
+    )
+    st.divider()
+    if st.button("🚪 Sair", use_container_width=True):
+        st.logout()
 
 
 def enviar_chats(p1_inicio_str, p1_fim_str, p2_inicio_str, p2_fim_str, p3_inicio_str, p3_fim_str):  # noqa
