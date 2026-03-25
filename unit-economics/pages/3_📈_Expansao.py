@@ -34,6 +34,54 @@ with col_title:
 with col_period:
     n_months = period_selector("expansao")
 
+with st.expander("ℹ️ Como ler esta página"):
+    st.markdown("""
+**Expansão** mede o crescimento gerado dentro da base existente — clientes que contrataram módulos adicionais ou fizeram upgrade de plano.
+
+---
+
+#### Definição de Expansion
+Um evento é classificado como expansion quando um cliente já existente (`dt_inicio_mens > dt_first`) adiciona um novo produto ao MRR.
+Renovações são excluídas: se um produto encerrou no último dia do mês X e reiniciou no mês X+1 com a mesma descrição, é renovação — não expansion.
+
+---
+
+#### KPIs do topo
+| Métrica | O que é | Como é calculado |
+|---|---|---|
+| **Expansion MRR** | MRR adicional gerado por clientes já existentes | Soma de `valor_total` de produtos novos ativados por clientes com histórico anterior |
+| **Clientes Expandidos** | Clientes que fizeram ao menos um upsell no mês | `COUNT(DISTINCT st_sincro_sac)` com expansion no mês |
+| **Attach Kids** | % da base ativa que possui o módulo Kids | `Clientes com Kids ativos ÷ Total de clientes ativos` no último mês |
+| **Attach Jornada** | % da base ativa que possui o módulo Jornada | Idem, para Jornada |
+| **Tempo médio ao upsell** | Dias entre a entrada do cliente e o primeiro upsell | Média ponderada por número de clientes em cada faixa de tempo |
+
+---
+
+#### Expansion MRR por Tipo
+Barras empilhadas mostrando quanto cada tipo de upsell contribuiu para a expansion:
+- **Kids, Jornada, Loja Inteligente, Totem** — módulos adicionais contratados
+- **Upgrade de Plano** — mudança de faixa ou plano base (ex: Lite → Pro)
+
+A pizza ao lado mostra a composição do último mês.
+
+#### Attach Rate por Módulo
+Percentual da base ativa que possui cada módulo, evolução mês a mês.
+`Attach Rate = Clientes com módulo ativo ÷ Total de clientes ativos`
+
+> Um attach rate crescente indica que o módulo está sendo bem adotado pela base — sinal positivo de expansão orgânica.
+
+#### Distribuição — Dias até Primeiro Upsell
+Histograma mostrando quanto tempo os clientes levam para fazer o primeiro upsell após a entrada.
+- Faixas: ≤30d · 31-60d · 61-90d · 3-6m · 6-12m · 1-2a · >2a
+- A tabela de estatísticas ao lado traz média, mediana e percentuais por faixa.
+
+> Quanto mais concentrado nas faixas curtas (≤90d), mais eficiente é o processo de upsell. Um volume alto em ">2a" indica que parte da base demora muito para expandir — ou nunca expande.
+
+#### Tabelas no rodapé
+- **Expansion MRR por Módulo** — dados mensais completos por tipo
+- **Clientes com Maior Expansion** — últimos 6 meses, por cliente e produto
+""")
+
 # ── Carga ─────────────────────────────────────────────────────────────────────
 with st.spinner("Carregando dados..."):
     df_wf      = load_mrr_waterfall()
@@ -42,17 +90,17 @@ with st.spinner("Carregando dados..."):
     df_timing  = load_upsell_timing()
     df_exp_det = load_expansion_detalhado()
 
-_current_month = pd.Timestamp.now().to_period("M").to_timestamp()
+_last_closed_month = (pd.Timestamp.now().to_period("M") - 1).to_timestamp()
 
 df_wf_f      = filter_months(df_wf, n_months)
 df_exp_mod_f = filter_months(df_exp_mod, n_months)
 df_attach_f  = filter_months(df_attach, n_months)
 
-# Remove meses futuros
-df_wf_f      = df_wf_f[df_wf_f["mes"] <= _current_month]
-df_exp_mod_f = df_exp_mod_f[df_exp_mod_f["mes"] <= _current_month]
-df_attach_f  = df_attach_f[df_attach_f["mes"] <= _current_month]
-df_exp_det_f = df_exp_det[df_exp_det["mes"] <= _current_month]
+# Remove mês atual (incompleto) — exibe apenas até o mês anterior fechado
+df_wf_f      = df_wf_f[df_wf_f["mes"] <= _last_closed_month]
+df_exp_mod_f = df_exp_mod_f[df_exp_mod_f["mes"] <= _last_closed_month]
+df_attach_f  = df_attach_f[df_attach_f["mes"] <= _last_closed_month]
+df_exp_det_f = df_exp_det[df_exp_det["mes"] <= _last_closed_month]
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 st.subheader("Métricas de Expansão")

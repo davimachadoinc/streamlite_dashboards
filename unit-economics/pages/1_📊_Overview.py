@@ -31,13 +31,58 @@ with col_title:
 with col_period:
     n_months = period_selector("overview")
 
+with st.expander("ℹ️ Como ler esta página"):
+    st.markdown("""
+**Overview** mostra a saúde geral do negócio em MRR — quanto a empresa cresce, perde e retém a cada mês.
+
+---
+
+#### KPIs do topo
+| Métrica | O que é | Como é calculado |
+|---|---|---|
+| **MRR Atual** | Receita recorrente mensal ao final do mês | Soma de todos os `valor_total` ativos no MRR no fim do mês |
+| **Clientes Ativos** | Clientes com ao menos um produto ativo no início do mês | `COUNT(DISTINCT st_sincro_sac)` onde `dt_inicio_mens < mês` e `dt_fim_mens ≥ mês - 1 dia` |
+| **ARPU** | Ticket médio por cliente | `MRR Atual ÷ Clientes Ativos` |
+| **NRR** | Net Revenue Retention — quanto da receita existente foi retida e expandida | `(MRR início + Expansion − Churn) ÷ MRR início × 100`. Acima de 100% significa que a expansão compensou o churn. |
+| **Net Expansion MRR** | Saldo líquido entre upsells e cancelamentos | `Expansion MRR − Churn MRR` |
+
+> Setup e PRO-RATA são excluídos de todos os cálculos.
+
+---
+
+#### Movimentos de MRR (waterfall)
+Decompõe a variação mensal do MRR em três movimentos:
+- **New Logo** (verde) — MRR de clientes entrando pela primeira vez
+- **Expansion** (amarelo) — MRR adicional de clientes que já existiam (upsell de módulo ou upgrade de plano)
+- **Churn** (vermelho, abaixo do zero) — MRR perdido por cancelamentos
+- **Linha NRR %** (eixo direito) — retenção líquida do mês
+
+#### Variação Mensal do MRR
+Mostra o `Δ MRR = MRR fim − MRR fim do mês anterior`. Verde = crescimento, vermelho = queda. A linha pontilhada é o MRR acumulado no eixo direito.
+
+#### MRR Total
+Evolução do MRR fim de mês como série temporal. A área preenchida facilita a visualização de tendência.
+
+#### MRR por Plano
+Mesma série, quebrada por plano (área empilhada). Permite ver qual plano está crescendo ou perdendo participação na receita.
+
+#### Tabela Waterfall Detalhada
+Todos os movimentos mês a mês em formato tabular — útil para validar números pontualmente.
+""")
+
 # ── Carga ─────────────────────────────────────────────────────────────────────
 with st.spinner("Carregando dados..."):
     df_wf  = load_mrr_waterfall()
     df_plan = load_mrr_por_plano()
 
+_last_closed_month = (pd.Timestamp.now().to_period("M") - 1).to_timestamp()
+
 df_wf_f   = filter_months(df_wf, n_months)
 df_plan_f = filter_months(df_plan, n_months)
+
+# Remove mês atual (incompleto) — exibe apenas até o mês anterior fechado
+df_wf_f   = df_wf_f[df_wf_f["mes"] <= _last_closed_month]
+df_plan_f = df_plan_f[df_plan_f["mes"] <= _last_closed_month]
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 st.subheader("Resumo do Período")

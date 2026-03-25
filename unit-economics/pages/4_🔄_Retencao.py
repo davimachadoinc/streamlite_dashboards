@@ -31,22 +31,73 @@ with col_title:
 with col_period:
     n_months = period_selector("retencao")
 
+with st.expander("ℹ️ Como ler esta página"):
+    st.markdown("""
+**Retenção** mede quanto da base de clientes e de MRR está sendo perdido a cada mês — e quanto vale um cliente enquanto permanece ativo.
+
+---
+
+#### Definição de Churn
+Um cliente é contabilizado como churn quando:
+1. Tem `dt_fim_mens IS NOT NULL` no MRR, **ou**
+2. Tem `dt_desativacao_sac IS NOT NULL` na base de clientes (mesmo sem `dt_fim_mens` — casos de encerramento manual)
+
+Itens excluídos do churn (não representam cancelamento real): Setup, PRO-RATA, renovações (produto que encerrou no último dia do mês e reiniciou no mês seguinte).
+
+---
+
+#### KPIs do topo
+| Métrica | O que é | Como é calculado |
+|---|---|---|
+| **Churn Rate (clientes)** | % de clientes perdidos no mês | `Clientes churned ÷ Clientes ativos no início do mês × 100` |
+| **Churn Rate (MRR)** | % de MRR perdido no mês | `MRR churned ÷ MRR ativo no início do mês × 100` |
+| **MRR Churned** | Receita absoluta perdida | Soma do `valor_total` dos produtos cancelados no mês |
+| **Clientes Churned** | Quantidade de clientes que saíram | `COUNT(DISTINCT st_sincro_sac)` com churn no mês |
+| **LTV Médio (base)** | Valor vitalício médio ponderado por clientes ativos | `ARPU ÷ Churn Rate` — média dos últimos 3 meses, ponderada por tamanho do plano |
+
+> ⚠️ Churn Rate (clientes) e Churn Rate (MRR) costumam divergir: clientes menores churnam mais em quantidade, mas o impacto em MRR é menor. Se o MRR churn for sistematicamente menor que o de clientes, é sinal de que quem sai é a base mais barata.
+
+---
+
+#### Churn Rate Mensal
+- **Gráfico esquerdo** — evolução temporal do churn consolidado (clientes e MRR)
+- **Gráfico direito** — comparativo entre planos no último mês (barras horizontais)
+
+#### MRR Churned por Plano
+Barras empilhadas mostrando a composição do MRR perdido por plano ao longo do tempo. Útil para identificar qual segmento está churning mais em termos de receita.
+
+#### LTV por Plano
+```
+ARPU por plano   = MRR ativo do plano ÷ Clientes ativos do plano
+Churn rate       = Clientes churned ÷ Clientes ativos  (média últimos 3 meses)
+LTV              = ARPU ÷ Churn rate mensal
+```
+Usa a média dos últimos 3 meses para suavizar variações pontuais.
+- **Gráfico LTV** — valor vitalício estimado por plano
+- **Gráfico ARPU** — ticket médio por plano (ao lado)
+
+> O LTV é uma estimativa simplificada. Pressupõe churn constante e ARPU estável. Em planos com baixo churn, o LTV pode parecer muito alto — interprete com cautela.
+
+#### Tabela LTV por Plano
+Detalha todos os componentes usados no cálculo: clientes ativos, MRR ativo, ARPU, Churn Rate e LTV estimado.
+""")
+
 # ── Carga ─────────────────────────────────────────────────────────────────────
 with st.spinner("Carregando dados..."):
     df_wf    = load_mrr_waterfall()
     df_churn = load_churn_por_plano()
     df_base  = load_base_ativa_por_plano()
 
-_current_month = pd.Timestamp.now().to_period("M").to_timestamp()
+_last_closed_month = (pd.Timestamp.now().to_period("M") - 1).to_timestamp()
 
 df_wf_f    = filter_months(df_wf, n_months)
 df_churn_f = filter_months(df_churn, n_months)
 df_base_f  = filter_months(df_base, n_months)
 
-# Remove meses futuros
-df_wf_f    = df_wf_f[df_wf_f["mes"] <= _current_month]
-df_churn_f = df_churn_f[df_churn_f["mes"] <= _current_month]
-df_base_f  = df_base_f[df_base_f["mes"] <= _current_month]
+# Remove mês atual (incompleto) — exibe apenas até o mês anterior fechado
+df_wf_f    = df_wf_f[df_wf_f["mes"] <= _last_closed_month]
+df_churn_f = df_churn_f[df_churn_f["mes"] <= _last_closed_month]
+df_base_f  = df_base_f[df_base_f["mes"] <= _last_closed_month]
 
 # ── Churn rate consolidado por mês (join churn + base) ───────────────────────
 df_churn_agg = df_churn_f.groupby("mes", as_index=False).agg(

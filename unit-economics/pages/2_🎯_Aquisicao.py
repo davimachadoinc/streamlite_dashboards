@@ -32,13 +32,69 @@ with col_title:
 with col_period:
     n_months = period_selector("aquisicao")
 
+with st.expander("ℹ️ Como ler esta página"):
+    st.markdown("""
+**Aquisição** mede o custo e a eficiência de trazer novos clientes — quanto se gasta, quantos chegam e se o investimento se paga.
+
+---
+
+#### Definição de "novo cliente"
+Um cliente é contado como novo no mês em que o seu **primeiro produto ativo** no MRR começou (`MIN(dt_inicio_mens)`).
+Módulos adicionais (Kids, Jornada, Loja) e itens de Setup e PRO-RATA são ignorados — só o plano base entra na contagem.
+
+> ⚠️ Se um mês aparecer com volume anormalmente alto, pode indicar carga retroativa de dados no MRR — verifique se os clientes têm `dt_cadastro_sac` muito anterior à `dt_inicio_mens`.
+
+---
+
+#### KPIs do topo
+| Métrica | O que é | Como é calculado |
+|---|---|---|
+| **Novos Clientes** | Clientes entrando pela primeira vez | `COUNT(DISTINCT st_sincro_sac)` com `dt_inicio_mens = dt_first` no mês |
+| **New Logo MRR** | MRR trazido pelos novos clientes | `SUM(valor_total)` de todos os produtos do cliente no mês de entrada |
+| **CAC** | Custo de Aquisição por Cliente | `Total de despesas de aquisição ÷ Novos clientes` do mês |
+| **Payback** | Meses para recuperar o CAC | `CAC ÷ ARPU` |
+| **LTV:CAC** | Razão entre valor gerado e custo de aquisição | `LTV ÷ CAC`. Meta: ≥ 3x |
+
+---
+
+#### Novos Clientes por Mês
+Barras empilhadas por plano + linha de total. A pizza ao lado mostra a distribuição entre planos no último mês selecionado.
+
+#### CAC & Payback por Mês
+- **Barra** = custo total de aquisição (despesas liquidadas nos centros de custo abaixo)
+- **Linha sólida** = CAC por cliente (eixo direito)
+- **Linha pontilhada** = Payback em meses (eixo direito)
+
+#### Composição dos Custos de Aquisição
+Despesas liquidadas no mês, agrupadas por tipo:
+| Grupo | Centros de custo incluídos |
+|---|---|
+| Comercial | Field Sales, Inbound, Sales, Outside Sales |
+| Marketing | Marketing |
+| Eventos & Parceiros | Eventos, Parceiros |
+| Outbound | Outbound |
+
+> As despesas vêm de uma planilha no Drive (`despesas_liquidadas`) e são filtradas pelo mês de liquidação (não competência).
+
+#### LTV : CAC
+```
+ARPU          = MRR início ÷ Clientes ativos
+Churn rate    = MRR churned ÷ MRR início  (suavizado: média móvel 3 meses)
+LTV           = ARPU ÷ Churn rate suavizado
+Payback       = CAC ÷ ARPU
+LTV:CAC       = LTV ÷ CAC
+```
+Cor das barras: 🟢 ≥ 3x · 🟡 ≥ 1x · 🔴 < 1x.
+A tabela lateral detalha todos os componentes do último mês.
+""")
+
 # ── Carga ─────────────────────────────────────────────────────────────────────
 with st.spinner("Carregando dados..."):
     df_wf       = load_mrr_waterfall()
     df_new_plan = load_new_logos_por_plano()
     df_desp     = load_despesas_cac()
 
-_current_month = pd.Timestamp.now().to_period("M").to_timestamp()
+_last_closed_month = (pd.Timestamp.now().to_period("M") - 1).to_timestamp()
 
 df_wf_f       = filter_months(df_wf, n_months)
 df_new_plan_f = filter_months(df_new_plan, n_months)
@@ -46,11 +102,11 @@ df_desp_f     = filter_months(df_desp, n_months)
 df_cac        = compute_cac_metrics(df_desp, df_wf)
 df_cac_f      = filter_months(df_cac, n_months)
 
-# Remove meses futuros
-df_wf_f       = df_wf_f[df_wf_f["mes"] <= _current_month]
-df_new_plan_f = df_new_plan_f[df_new_plan_f["mes"] <= _current_month]
-df_desp_f     = df_desp_f[df_desp_f["mes"] <= _current_month]
-df_cac_f      = df_cac_f[df_cac_f["mes"] <= _current_month]
+# Remove mês atual (incompleto) — exibe apenas até o mês anterior fechado
+df_wf_f       = df_wf_f[df_wf_f["mes"] <= _last_closed_month]
+df_new_plan_f = df_new_plan_f[df_new_plan_f["mes"] <= _last_closed_month]
+df_desp_f     = df_desp_f[df_desp_f["mes"] <= _last_closed_month]
+df_cac_f      = df_cac_f[df_cac_f["mes"] <= _last_closed_month]
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 st.subheader("Métricas de Aquisição")
