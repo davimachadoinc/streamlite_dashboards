@@ -1,6 +1,7 @@
 import pandas as pd
 import requests
 import streamlit as st
+from authlib.integrations.requests_client import OAuth2Session
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -10,8 +11,37 @@ st.set_page_config(
     layout="wide"
 )
 
-# ── Auth ───────────────────────────────────────────────────────────────────────
-if not st.user.is_logged_in:
+# ── OAuth config ───────────────────────────────────────────────────────────────
+CLIENT_ID = st.secrets["auth"]["client_id"]
+CLIENT_SECRET = st.secrets["auth"]["client_secret"]
+REDIRECT_URI = "https://marcacao-ferias-inc.streamlit.app"
+AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+
+
+def get_auth_url():
+    client = OAuth2Session(CLIENT_ID, scope="openid email profile", redirect_uri=REDIRECT_URI)
+    url, _ = client.create_authorization_url(AUTH_URL, prompt="select_account")
+    return url
+
+
+# ── Processar callback OAuth ───────────────────────────────────────────────────
+if "code" in st.query_params and "authenticated_email" not in st.session_state:
+    try:
+        client = OAuth2Session(CLIENT_ID, CLIENT_SECRET, redirect_uri=REDIRECT_URI)
+        client.fetch_token(TOKEN_URL, code=st.query_params["code"], grant_type="authorization_code")
+        userinfo = client.get(USERINFO_URL).json()
+        st.session_state["authenticated_email"] = userinfo["email"].lower().strip()
+        st.query_params.clear()
+        st.rerun()
+    except Exception as e:
+        st.error(f"Erro no processo de login: {e}")
+        st.link_button("Tentar novamente", get_auth_url())
+        st.stop()
+
+# ── Página de login ────────────────────────────────────────────────────────────
+if "authenticated_email" not in st.session_state:
     st.image(
         "https://inchurch.com.br/wp-content/uploads/2024/09/inchurch-logo-svg.svg",
         width=240
@@ -19,28 +49,20 @@ if not st.user.is_logged_in:
     st.title("Gerenciamento de Férias")
     st.markdown("---")
     st.write("Faça login com sua conta Google **@inchurch.com.br** para acessar o sistema.")
-    st.login()
+    st.link_button("Entrar com Google", get_auth_url())
     st.stop()
 
-# Garante que o email esteja disponível antes de continuar
-if not st.user.email:
-    st.warning("Autenticação em andamento, aguarde...")
-    st.stop()
-
-# ── Google Sheets ──────────────────────────────────────────────────────────────
+# ── Usuário autenticado — Google Sheets ───────────────────────────────────────
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SPREADSHEET_ID = '1n-VTjTz90GBmtmLU8cxYtBtmTwn234NZT7UKFkl6eqY'
 
 try:
-    gcp_secret = dict(st.secrets["gcp_service_account"])
-except KeyError:
-    st.error("❌ Chave 'gcp_service_account' não encontrada nos secrets. Verifique a configuração no Streamlit Cloud.")
-    st.info("Os secrets devem conter uma seção [gcp_service_account] com os campos da service account.")
-    st.stop()
-
-try:
-    creds = Credentials.from_service_account_info(gcp_secret, scopes=SCOPES)
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"]), scopes=SCOPES)
     service = build('sheets', 'v4', credentials=creds)
+except KeyError:
+    st.error("❌ Chave 'gcp_service_account' não encontrada nos secrets.")
+    st.stop()
 except Exception as e:
     st.error(f"❌ Erro ao carregar credenciais do Google Sheets: {e}")
     st.stop()
@@ -102,25 +124,28 @@ if not dados_principal:
     st.stop()
 principal = pd.DataFrame(dados_principal[1:], columns=dados_principal[0])
 principal = principal[principal['Situação do Contrato'] == 'ATIVO']
+principal["Email Corporativo"] = principal["Email Corporativo"].str.lower().str.strip()
 
 # ── Interface principal ────────────────────────────────────────────────────────
 st.logo("https://inchurch.com.br/wp-content/uploads/2024/09/inchurch-logo-svg.svg")
 st.title("Gerenciamento de Férias")
 
-email_input = st.user.email.lower().strip()
-emails = [e.lower().strip() for e in principal["Email Corporativo"].tolist()]
+email_input = st.session_state["authenticated_email"]
+emails = principal["Email Corporativo"].tolist()
 if email_input not in emails:
     st.error(f"O email **{email_input}** não tem acesso a este app. Entre em contato com o DP.")
+    if st.button("Sair"):
+        del st.session_state["authenticated_email"]
+        st.rerun()
     st.stop()
-
-# Reindexar com email normalizado para o lookup
-principal["Email Corporativo"] = principal["Email Corporativo"].str.lower().str.strip()
 
 nome_marcador = principal[principal["Email Corporativo"] == email_input]["Nome Completo"].values[0]
 
 with st.sidebar:
     st.write(f"Logado como **{nome_marcador}**")
-    st.logout()
+    if st.button("Sair"):
+        del st.session_state["authenticated_email"]
+        st.rerun()
 
 
 def enviar_chats(p1_inicio_str, p1_fim_str, p2_inicio_str, p2_fim_str, p3_inicio_str, p3_fim_str):  # noqa
