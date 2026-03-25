@@ -4,16 +4,6 @@ import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
-st.set_page_config(
-    page_title="Gerenciamento de Férias",
-    page_icon="🏖️",
-    layout="wide"
-)
-
-# Guard: redireciona para login se não autenticado
-if not st.user.is_logged_in:
-    st.switch_page("AppFerias.py")
-
 # Configuração da API do Google Sheets
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SPREADSHEET_ID = '1n-VTjTz90GBmtmLU8cxYtBtmTwn234NZT7UKFkl6eqY'
