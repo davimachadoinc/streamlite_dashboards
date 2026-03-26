@@ -4,6 +4,30 @@ import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
+
+def safe_strftime(dt, fmt="%d/%m/%Y"):
+    """Converte data para string ignorando None e NaT com segurança."""
+    if dt is None:
+        return None
+    try:
+        if pd.isna(dt):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return dt.strftime(fmt)
+
+
+def safe_to_date(valor):
+    """Converte string/valor para Timestamp sem tz, retorna None se inválido."""
+    if valor is None or str(valor).strip() == "":
+        return None
+    result = pd.to_datetime(valor, errors="coerce", dayfirst=True)
+    if pd.isna(result):
+        return None
+    if result.tzinfo is not None:
+        return result.tz_convert(None)
+    return result
+
 st.set_page_config(
     page_title="Gerenciamento de Férias",
     page_icon="🏖️",
@@ -289,12 +313,12 @@ def marcar_ferias():
             tamanho = marcacoes["ID"].tolist()
             id = len(tamanho)
             try:
-                p1_inicio_str = p1_inicio.strftime("%d/%m/%Y")  # type: ignore
-                p1_fim_str = p1_fim.strftime("%d/%m/%Y")  # type: ignore
-                p2_inicio_str = p2_inicio.strftime("%d/%m/%Y") if p2_inicio else None  # type: ignore
-                p2_fim_str = p2_fim.strftime("%d/%m/%Y") if p2_fim else None  # type: ignore
-                p3_inicio_str = p3_inicio.strftime("%d/%m/%Y") if p3_inicio else None  # type: ignore
-                p3_fim_str = p3_fim.strftime("%d/%m/%Y") if p3_fim else None  # type: ignore
+                p1_inicio_str = safe_strftime(p1_inicio)
+                p1_fim_str = safe_strftime(p1_fim)
+                p2_inicio_str = safe_strftime(p2_inicio)
+                p2_fim_str = safe_strftime(p2_fim)
+                p3_inicio_str = safe_strftime(p3_inicio)
+                p3_fim_str = safe_strftime(p3_fim)
 
                 dados_marcacao = [
                     id, data_marcacao, email_input, email_colaborador,
@@ -379,9 +403,9 @@ if opcao == "Marcar Novas Férias ou Alterar Férias Marcadas":
                 if abono == "COM abono":
                     periodo = st.radio("Qual período deseja alterar?", ["P1", "P2"])
                     agora = pd.Timestamp.now().tz_localize(None)
-                    data_inicio = pd.to_datetime(alterar_df[f"Início {periodo}"].values[0], errors='coerce', dayfirst=True).tz_localize(None)  # noqa
+                    data_inicio = safe_to_date(alterar_df[f"Início {periodo}"].values[0])
 
-                    if agora > data_inicio:
+                    if data_inicio is None or agora > data_inicio:
                         st.warning("Você não pode alterar férias que já começaram.")
                     else:
                         inicio = st.date_input(f"Início das férias {periodo}:")
@@ -390,19 +414,20 @@ if opcao == "Marcar Novas Férias ou Alterar Férias Marcadas":
                         st.success(f"Duração: {duracao.days + 1} dias. Último dia: {fim}")
                         if periodo == "P1":
                             p1_inicio, p1_fim = inicio, fim
-                            p2_inicio = pd.to_datetime(alterar_df["Início P2"].values[0], errors='coerce', dayfirst=True) if alterar_df["Início P2"].values[0] != "" else None  # noqa
-                            p2_fim = pd.to_datetime(alterar_df["Fim P2"].values[0], errors='coerce', dayfirst=True) if alterar_df["Início P2"].values[0] != "" else None  # noqa
+                            p2_inicio = safe_to_date(alterar_df["Início P2"].values[0])
+                            p2_fim = safe_to_date(alterar_df["Fim P2"].values[0])
                             p3_inicio = p3_fim = None
                         else:
-                            p1_inicio = pd.to_datetime(alterar_df["Início P1"].values[0], errors='coerce', dayfirst=True)  # noqa
-                            p1_fim = pd.to_datetime(alterar_df["Fim P1"].values[0], errors='coerce', dayfirst=True)  # noqa
+                            p1_inicio = safe_to_date(alterar_df["Início P1"].values[0])
+                            p1_fim = safe_to_date(alterar_df["Fim P1"].values[0])
                             p2_inicio, p2_fim = inicio, fim
                             p3_inicio = p3_fim = None
                 else:
                     st.info("Para férias sem abono, a duração total deve ser 30 dias.")
                     periodo = st.radio("Qual período deseja alterar?", ["P1", "P2", "P3"])
 
-                    if pd.Timestamp.now() > pd.to_datetime(alterar_df[f"Início {periodo}"].values[0], errors='coerce', dayfirst=True):  # noqa
+                    data_inicio_periodo = safe_to_date(alterar_df[f"Início {periodo}"].values[0])
+                    if data_inicio_periodo is None or pd.Timestamp.now() > data_inicio_periodo:
                         st.warning("Você não pode alterar férias que já começaram.")
                     else:
                         inicio = st.date_input(f"Início das férias {periodo}:")
@@ -411,21 +436,21 @@ if opcao == "Marcar Novas Férias ou Alterar Férias Marcadas":
                         st.success(f"Último dia das férias {periodo}: {fim}")
                         if periodo == "P1":
                             p1_inicio, p1_fim = inicio, fim
-                            p2_inicio = pd.to_datetime(alterar_df["Início P2"].values[0], errors='coerce', dayfirst=True) if alterar_df["Início P2"].values[0] != "" else None  # noqa
-                            p2_fim = pd.to_datetime(alterar_df["Fim P2"].values[0], errors='coerce', dayfirst=True) if alterar_df["Início P2"].values[0] != "" else None  # noqa
-                            p3_inicio = pd.to_datetime(alterar_df["Início P3"].values[0], errors='coerce', dayfirst=True) if alterar_df["Início P3"].values[0] != "" else None  # noqa
-                            p3_fim = pd.to_datetime(alterar_df["Fim P3"].values[0], errors='coerce', dayfirst=True) if alterar_df["Início P3"].values[0] != "" else None  # noqa
+                            p2_inicio = safe_to_date(alterar_df["Início P2"].values[0])
+                            p2_fim = safe_to_date(alterar_df["Fim P2"].values[0])
+                            p3_inicio = safe_to_date(alterar_df["Início P3"].values[0])
+                            p3_fim = safe_to_date(alterar_df["Fim P3"].values[0])
                         elif periodo == "P2":
-                            p1_inicio = pd.to_datetime(alterar_df["Início P1"].values[0], errors='coerce', dayfirst=True)  # noqa
-                            p1_fim = pd.to_datetime(alterar_df["Fim P1"].values[0], errors='coerce', dayfirst=True)  # noqa
+                            p1_inicio = safe_to_date(alterar_df["Início P1"].values[0])
+                            p1_fim = safe_to_date(alterar_df["Fim P1"].values[0])
                             p2_inicio, p2_fim = inicio, fim
-                            p3_inicio = pd.to_datetime(alterar_df["Início P3"].values[0], errors='coerce', dayfirst=True) if alterar_df["Início P3"].values[0] != "" else None  # noqa
-                            p3_fim = pd.to_datetime(alterar_df["Fim P3"].values[0], errors='coerce', dayfirst=True) if alterar_df["Início P3"].values[0] != "" else None  # noqa
+                            p3_inicio = safe_to_date(alterar_df["Início P3"].values[0])
+                            p3_fim = safe_to_date(alterar_df["Fim P3"].values[0])
                         else:
-                            p1_inicio = pd.to_datetime(alterar_df["Início P1"].values[0], errors='coerce', dayfirst=True)  # noqa
-                            p1_fim = pd.to_datetime(alterar_df["Fim P1"].values[0], errors='coerce', dayfirst=True)  # noqa
-                            p2_inicio = pd.to_datetime(alterar_df["Início P2"].values[0], errors='coerce', dayfirst=True)  # noqa
-                            p2_fim = pd.to_datetime(alterar_df["Fim P2"].values[0], errors='coerce', dayfirst=True)  # noqa
+                            p1_inicio = safe_to_date(alterar_df["Início P1"].values[0])
+                            p1_fim = safe_to_date(alterar_df["Fim P1"].values[0])
+                            p2_inicio = safe_to_date(alterar_df["Início P2"].values[0])
+                            p2_fim = safe_to_date(alterar_df["Fim P2"].values[0])
                             p3_inicio, p3_fim = inicio, fim
 
                 if st.button("Salvar Alteração"):
@@ -433,12 +458,12 @@ if opcao == "Marcar Novas Férias ou Alterar Férias Marcadas":
                     tamanho = marcacoes["ID"].tolist()
                     id = len(tamanho)
                     try:
-                        p1_inicio_str = p1_inicio.strftime("%d/%m/%Y")  # type: ignore
-                        p1_fim_str = p1_fim.strftime("%d/%m/%Y")  # type: ignore
-                        p2_inicio_str = p2_inicio.strftime("%d/%m/%Y") if p2_inicio else None  # type: ignore
-                        p2_fim_str = p2_fim.strftime("%d/%m/%Y") if p2_fim else None  # type: ignore
-                        p3_inicio_str = p3_inicio.strftime("%d/%m/%Y") if p3_inicio else None  # type: ignore
-                        p3_fim_str = p3_fim.strftime("%d/%m/%Y") if p3_fim else None  # type: ignore
+                        p1_inicio_str = safe_strftime(p1_inicio)
+                        p1_fim_str = safe_strftime(p1_fim)
+                        p2_inicio_str = safe_strftime(p2_inicio)
+                        p2_fim_str = safe_strftime(p2_fim)
+                        p3_inicio_str = safe_strftime(p3_inicio)
+                        p3_fim_str = safe_strftime(p3_fim)
 
                         dados_marcacao = [
                             id, data_marcacao, email_input, email_colaborador,
