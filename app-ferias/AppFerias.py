@@ -122,7 +122,7 @@ dados_principal = ler_dados('colaboradores', 'A1:L400')
 if not dados_principal:
     st.error("Sem acesso à planilha. Verifique se a service account tem permissão de Editor.")
     st.stop()
-principal = pd.DataFrame(dados_principal[1:], columns=dados_principal[0])
+principal = pd.DataFrame(dados_principal[1:], columns=[c.strip() for c in dados_principal[0]])
 principal = principal[principal['Situação do Contrato'] == 'ATIVO']
 principal["Email Corporativo"] = principal["Email Corporativo"].str.lower().str.strip()
 
@@ -140,7 +140,8 @@ if email_input not in emails:
             st.logout()
     st.stop()
 
-nome_marcador = principal[principal["Email Corporativo"] == email_input]["Nome Completo"].values[0]
+col_nome = next((c for c in principal.columns if c.lower().startswith("nome")), None)
+nome_marcador = principal[principal["Email Corporativo"] == email_input][col_nome].values[0] if col_nome else user_name
 
 with st.sidebar:
     st.markdown(
