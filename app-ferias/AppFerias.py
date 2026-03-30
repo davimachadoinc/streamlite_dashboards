@@ -112,7 +112,7 @@ marcados = ler_dados("Marcações", "A1:P400")
 if not marcados:
     st.error("Sem acesso à planilha. Verifique se a service account tem permissão de Editor.")
     st.stop()
-marcacoes = pd.DataFrame(marcados[1:], columns=marcados[0])
+marcacoes = pd.DataFrame(marcados[1:], columns=[c.strip() for c in marcados[0]])
 marcacoes_validas = marcacoes[marcacoes["Validado por DP"] != "Reprovado"]
 alteradas = marcacoes_validas[marcacoes_validas["Alteração"] != ""]
 marcacoes_validas = marcacoes_validas[~marcacoes_validas["ID"].isin(alteradas["Alteração"])]
@@ -123,6 +123,18 @@ if not dados_principal:
     st.error("Sem acesso à planilha. Verifique se a service account tem permissão de Editor.")
     st.stop()
 principal = pd.DataFrame(dados_principal[1:], columns=[c.strip() for c in dados_principal[0]])
+_expected_cols = {
+    "Nome Completo", "Email Corporativo", "Time", "Situação do Contrato",
+    "Saldo de dias", "Fim PA1", "GESTOR IMEDIATO", "Contrato"
+}
+_missing = _expected_cols - set(principal.columns)
+if _missing:
+    st.error(
+        f"❌ Colunas não encontradas na aba **colaboradores**: `{sorted(_missing)}`\n\n"
+        f"Colunas disponíveis: `{sorted(principal.columns.tolist())}`"
+    )
+    st.stop()
+
 principal = principal[principal['Situação do Contrato'] == 'ATIVO']
 principal["Email Corporativo"] = principal["Email Corporativo"].str.lower().str.strip()
 
