@@ -180,14 +180,13 @@ _VALIDATION_TABLES: list[tuple[str, str, str, str, str]] = [
     ("validacao_backend_fechamentos", "Tertiarygroup_id", "backend_str",      "ok", "Backend Fechamento"),
     ("splgc_validacao_setup",         "Tertiarygroup_id", "ok",               "ok", "Setup Superlógica"),
     ("splgc_validacao_produtos",      "Tertiarygroup_id", "ok",               "ok", "Produtos Superlógica"),
-    ("splgc_validacao_produtos2",     "tertiarygroup_id", "ok",               "ok", "Produtos Superlógica 2"),
-    ("splgc_validacao_produtos3",     "tertiarygroup_id", "ok",               "ok", "Produtos Superlógica 3"),
     ("hubspot_validacao",             "tertiarygroup_id", "hubspot_status",   "ok", "HubSpot"),
     ("fechamentos_validacao_produtos","Tertiarygroup_id", "validacao_produto","ok", "Produto Fechamento"),
     ("fechamentos_validacao_modulos", "Tertiarygroup_id", "validacao_modulo", "ok", "Módulo Fechamento"),
     ("fechamentos_validacao_setup",   "Tertiarygroup_id", "validacao_setup",  "ok", "Setup Fechamento"),
     ("upsell_validacao_produtos",     "tertiarygroup_id", "validacao_preco",  "ok", "Preço Upsell"),
     ("upsell_validacao_modulos",      "tertiarygroup_id", "validacao_modulo", "ok", "Módulo Upsell"),
+    ("upsell_validacao_setup",        "Tertiarygroup_id", "validacao_setup",  "ok", "Setup Upsell"),
 ]
 
 
