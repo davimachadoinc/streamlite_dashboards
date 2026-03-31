@@ -174,128 +174,61 @@ def load_fechamentos() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERIES — CONFERÊNCIAS
 # ─────────────────────────────────────────────
+
+# Cada entrada: (table, id_col, status_col, ok_value, label)
+_VALIDATION_TABLES: list[tuple[str, str, str, str, str]] = [
+    ("validacao_backend_fechamentos", "Tertiarygroup_id", "backend_str",      "ok", "Backend Fechamento"),
+    ("splgc_validacao_setup",         "Tertiarygroup_id", "ok",               "ok", "Setup Superlógica"),
+    ("splgc_validacao_produtos",      "Tertiarygroup_id", "ok",               "ok", "Produtos Superlógica"),
+    ("splgc_validacao_produtos2",     "tertiarygroup_id", "ok",               "ok", "Produtos Superlógica 2"),
+    ("splgc_validacao_produtos3",     "tertiarygroup_id", "ok",               "ok", "Produtos Superlógica 3"),
+    ("hubspot_validacao",             "tertiarygroup_id", "hubspot_status",   "ok", "HubSpot"),
+    ("fechamentos_validacao_produtos","Tertiarygroup_id", "validacao_produto","ok", "Produto Fechamento"),
+    ("fechamentos_validacao_modulos", "Tertiarygroup_id", "validacao_modulo", "ok", "Módulo Fechamento"),
+    ("fechamentos_validacao_setup",   "Tertiarygroup_id", "validacao_setup",  "ok", "Setup Fechamento"),
+    ("upsell_validacao_produtos",     "tertiarygroup_id", "validacao_preco",  "ok", "Preço Upsell"),
+    ("upsell_validacao_modulos",      "tertiarygroup_id", "validacao_modulo", "ok", "Módulo Upsell"),
+]
+
+
+def _query_validation_table(table: str, id_col: str, status_col: str, label: str) -> pd.DataFrame:
+    """Query a single validation table; returns empty DataFrame if table doesn't exist."""
+    query = f"""
+    SELECT
+        CAST({id_col} AS STRING)      AS tertiarygroup_id,
+        '{label}'                     AS tipo,
+        CAST({status_col} AS STRING)  AS detalhe
+    FROM `{_DATASET}.{table}`
+    WHERE LOWER(COALESCE(CAST({status_col} AS STRING), '')) != 'ok'
+    """
+    try:
+        return _bq_client_bi().query(query).to_dataframe()
+    except Exception:
+        return pd.DataFrame(columns=["tertiarygroup_id", "tipo", "detalhe"])
+
+
 @st.cache_data(ttl=3600)
 def load_ids_com_problema() -> set[str]:
     """Returns set of tertiarygroup_ids (STRING) that have any validation issue."""
-    query = f"""
-    SELECT DISTINCT CAST(Tertiarygroup_id AS STRING) AS tid
-    FROM `{_DATASET}.validacao_backend_fechamentos`
-    WHERE LOWER(COALESCE(CAST(backend_str AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(Tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.splgc_validacao_setup`
-    WHERE LOWER(COALESCE(CAST(ok AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(Tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.splgc_validacao_produtos`
-    WHERE LOWER(COALESCE(CAST(ok AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.splgc_validacao_produtos2`
-    WHERE LOWER(COALESCE(CAST(ok AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.splgc_validacao_produtos3`
-    WHERE LOWER(COALESCE(CAST(ok AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.hubspot_validacao`
-    WHERE LOWER(COALESCE(CAST(hubspot_status AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(Tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.fechamentos_validacao_produtos`
-    WHERE LOWER(COALESCE(CAST(validacao_produto AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(Tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.fechamentos_validacao_modulos`
-    WHERE LOWER(COALESCE(CAST(validacao_modulo AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(Tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.fechamentos_validacao_setup`
-    WHERE LOWER(COALESCE(CAST(validacao_setup AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.upsell_validacao_produtos`
-    WHERE LOWER(COALESCE(CAST(validacao_preco AS STRING), '')) != 'ok'
-    UNION DISTINCT
-    SELECT CAST(tertiarygroup_id AS STRING)
-    FROM `{_DATASET}.upsell_validacao_modulos`
-    WHERE LOWER(COALESCE(CAST(validacao_modulo AS STRING), '')) != 'ok'
-    """
-    df = _bq_query(query)
+    frames = [
+        _query_validation_table(t, id_col, status_col, label)
+        for t, id_col, status_col, _, label in _VALIDATION_TABLES
+    ]
+    df = pd.concat([f for f in frames if not f.empty], ignore_index=True) if any(not f.empty for f in frames) else pd.DataFrame()
     if df.empty:
         return set()
-    return set(df["tid"].dropna().astype(str).tolist())
+    return set(df["tertiarygroup_id"].dropna().astype(str).tolist())
 
 
 @st.cache_data(ttl=3600)
 def load_conferencias_detalhado() -> pd.DataFrame:
-    """Returns all validation issues (tipo, tertiarygroup_id, detalhe)."""
-    query = f"""
-    SELECT CAST(Tertiarygroup_id AS STRING) AS tertiarygroup_id,
-           'Backend Fechamento'             AS tipo,
-           CAST(backend_str AS STRING)      AS detalhe
-    FROM `{_DATASET}.validacao_backend_fechamentos`
-    WHERE LOWER(COALESCE(CAST(backend_str AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(Tertiarygroup_id AS STRING), 'Setup Superlógica', CAST(ok AS STRING)
-    FROM `{_DATASET}.splgc_validacao_setup`
-    WHERE LOWER(COALESCE(CAST(ok AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(Tertiarygroup_id AS STRING), 'Produtos Superlógica', CAST(ok AS STRING)
-    FROM `{_DATASET}.splgc_validacao_produtos`
-    WHERE LOWER(COALESCE(CAST(ok AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(tertiarygroup_id AS STRING), 'Produtos Superlógica 2', CAST(ok AS STRING)
-    FROM `{_DATASET}.splgc_validacao_produtos2`
-    WHERE LOWER(COALESCE(CAST(ok AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(tertiarygroup_id AS STRING), 'Produtos Superlógica 3', CAST(ok AS STRING)
-    FROM `{_DATASET}.splgc_validacao_produtos3`
-    WHERE LOWER(COALESCE(CAST(ok AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(tertiarygroup_id AS STRING), 'HubSpot', CAST(hubspot_status AS STRING)
-    FROM `{_DATASET}.hubspot_validacao`
-    WHERE LOWER(COALESCE(CAST(hubspot_status AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(Tertiarygroup_id AS STRING), 'Produto Fechamento', CAST(validacao_produto AS STRING)
-    FROM `{_DATASET}.fechamentos_validacao_produtos`
-    WHERE LOWER(COALESCE(CAST(validacao_produto AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(Tertiarygroup_id AS STRING), 'Módulo Fechamento', CAST(validacao_modulo AS STRING)
-    FROM `{_DATASET}.fechamentos_validacao_modulos`
-    WHERE LOWER(COALESCE(CAST(validacao_modulo AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(Tertiarygroup_id AS STRING), 'Setup Fechamento', CAST(validacao_setup AS STRING)
-    FROM `{_DATASET}.fechamentos_validacao_setup`
-    WHERE LOWER(COALESCE(CAST(validacao_setup AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(tertiarygroup_id AS STRING), 'Preço Upsell', CAST(validacao_preco AS STRING)
-    FROM `{_DATASET}.upsell_validacao_produtos`
-    WHERE LOWER(COALESCE(CAST(validacao_preco AS STRING), '')) != 'ok'
-
-    UNION ALL
-
-    SELECT CAST(tertiarygroup_id AS STRING), 'Módulo Upsell', CAST(validacao_modulo AS STRING)
-    FROM `{_DATASET}.upsell_validacao_modulos`
-    WHERE LOWER(COALESCE(CAST(validacao_modulo AS STRING), '')) != 'ok'
-    """
-    return _bq_query(query)
+    """Returns all validation issues (tipo, tertiarygroup_id, detalhe).
+    Queries each table individually — missing tables are silently skipped."""
+    frames = [
+        _query_validation_table(t, id_col, status_col, label)
+        for t, id_col, status_col, _, label in _VALIDATION_TABLES
+    ]
+    non_empty = [f for f in frames if not f.empty]
+    if not non_empty:
+        return pd.DataFrame(columns=["tertiarygroup_id", "tipo", "detalhe"])
+    return pd.concat(non_empty, ignore_index=True)
