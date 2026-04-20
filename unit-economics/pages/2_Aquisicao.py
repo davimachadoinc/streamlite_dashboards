@@ -101,6 +101,25 @@ df_vs_f   = _apply_filters(filter_months(df_vs,   n_months))
 df_wf_f   = filter_months(df_wf, n_months)
 df_cac_f  = filter_months(df_cac, n_months)
 
+
+def _tipo_fechamento(fonte):
+    """Deriva o tipo a partir da coluna fonte."""
+    if pd.isna(fonte):
+        return "Sem fonte"
+    f = str(fonte).strip().lower()
+    if f == "fechamentos backend":
+        return "New Logo"
+    if "upsell" in f:
+        return "Upsell"
+    if "ajuste" in f:
+        return "Ajuste Manual"
+    return "Outro"
+
+
+if not df_fech_f.empty:
+    df_fech_f = df_fech_f.copy()
+    df_fech_f["tipo"] = df_fech_f["fonte"].apply(_tipo_fechamento)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SEÇÃO 1 — FECHAMENTOS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -108,17 +127,17 @@ st.subheader("Fechamentos por Mês")
 
 k1, k2, k3, k4, k5 = st.columns(5)
 
-total_fech  = len(df_fech_f)
-mrr_total   = df_fech_f["mrr_fechado"].sum() if not df_fech_f.empty else 0
-fyv_total   = df_fech_f["FYV"].sum()         if not df_fech_f.empty else 0
-ticket_med  = mrr_total / total_fech          if total_fech > 0 else 0
-novos       = int(df_fech_f["new_deal"].sum()) if not df_fech_f.empty and "new_deal" in df_fech_f else 0
-upsells     = int(df_fech_f["upsell"].sum())   if not df_fech_f.empty and "upsell" in df_fech_f else 0
+total_fech = len(df_fech_f)
+mrr_total  = df_fech_f["mrr_fechado"].sum() if not df_fech_f.empty else 0
+fyv_total  = df_fech_f["FYV"].sum()         if not df_fech_f.empty else 0
+ticket_med = mrr_total / total_fech          if total_fech > 0 else 0
+novos      = int((df_fech_f["tipo"] == "New Logo").sum())      if not df_fech_f.empty else 0
+upsells    = int((df_fech_f["tipo"] == "Upsell").sum())        if not df_fech_f.empty else 0
 
 with k1:
     st.metric("Total Fechamentos", f"{total_fech:,}".replace(",", "."))
 with k2:
-    st.metric("Novos / Upsell", f"{novos} / {upsells}")
+    st.metric("New Logo / Upsell", f"{novos} / {upsells}")
 with k3:
     st.metric("MRR Fechado", f"R$ {fmt_brl(mrr_total)}")
 with k4:
@@ -135,47 +154,35 @@ with col_a:
     if df_fech_f.empty:
         no_data()
     else:
-        df_plot = (
-            df_fech_f.groupby(["mes", "new_deal", "upsell"], as_index=False)
-            .agg(qtd=("mrr_fechado", "count"), mrr=("mrr_fechado", "sum"))
-        )
-        # Reagrupa por mes + tipo
-        df_new = (
-            df_fech_f[df_fech_f["new_deal"] == True]
-            .groupby("mes", as_index=False)
-            .agg(qtd=("mrr_fechado", "count"), mrr=("mrr_fechado", "sum"))
-        )
-        df_ups = (
-            df_fech_f[df_fech_f["upsell"] == True]
-            .groupby("mes", as_index=False)
-            .agg(qtd=("mrr_fechado", "count"), mrr=("mrr_fechado", "sum"))
-        )
+        TIPO_COLORS = {
+            "New Logo":      PALETTE[0],
+            "Upsell":        PALETTE[3],
+            "Ajuste Manual": PALETTE[4],
+            "Sem fonte":     PALETTE[8],
+            "Outro":         PALETTE[8],
+        }
+
         # Base para eixo X ordenado
         df_base = df_fech_f.groupby("mes", as_index=False)["mrr_fechado"].sum()
-        df_base, x_order = mes_fmt_ordered(df_base)
-
-        def _enrich(df_agg):
-            df_agg, _ = mes_fmt_ordered(df_agg)
-            return df_agg
-
-        df_new = _enrich(df_new)
-        df_ups = _enrich(df_ups)
+        _, x_order = mes_fmt_ordered(df_base)
 
         fig = go.Figure()
-        fig.add_bar(
-            x=df_new["mes_fmt"], y=df_new["mrr"],
-            name="New Logo",
-            marker_color=PALETTE[0],
-            customdata=df_new["qtd"],
-            hovertemplate="<b>New Logo</b><br>R$ %{y:,.0f} | %{customdata} fechamentos<extra></extra>",
-        )
-        fig.add_bar(
-            x=df_ups["mes_fmt"], y=df_ups["mrr"],
-            name="Upsell",
-            marker_color=PALETTE[3],
-            customdata=df_ups["qtd"],
-            hovertemplate="<b>Upsell</b><br>R$ %{y:,.0f} | %{customdata} fechamentos<extra></extra>",
-        )
+        for tipo in ["New Logo", "Upsell", "Ajuste Manual", "Sem fonte", "Outro"]:
+            sub = (
+                df_fech_f[df_fech_f["tipo"] == tipo]
+                .groupby("mes", as_index=False)
+                .agg(qtd=("mrr_fechado", "count"), mrr=("mrr_fechado", "sum"))
+            )
+            if sub.empty:
+                continue
+            sub, _ = mes_fmt_ordered(sub)
+            fig.add_bar(
+                x=sub["mes_fmt"], y=sub["mrr"],
+                name=tipo,
+                marker_color=TIPO_COLORS.get(tipo, PALETTE[3]),
+                customdata=sub["qtd"],
+                hovertemplate=f"<b>{tipo}</b><br>R$ %{{y:,.0f}} | %{{customdata}} fechamentos<extra></extra>",
+            )
         fig.update_layout(
             barmode="stack",
             xaxis=dict(categoryorder="array", categoryarray=x_order, type="category"),

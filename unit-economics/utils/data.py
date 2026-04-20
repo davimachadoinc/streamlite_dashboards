@@ -1135,6 +1135,7 @@ def load_fechamentos_vendas() -> pd.DataFrame:
       value                              AS mrr_fechado,
       setup,
       FYV,
+      fonte,
       upsell,
       new_deal
     FROM `business-intelligence-467516.Fechamento_vendas.Fechamentos_com_ajustes`
