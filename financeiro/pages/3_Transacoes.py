@@ -20,6 +20,7 @@ from utils.data import (
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
     load_transactions_por_metodo, load_transactions_clientes_por_mes,
+    load_intermediacao_mensal,
 )
 
 inject_css()
@@ -47,8 +48,9 @@ with col_filter:
 
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando dados de transações..."):
-    df_raw    = load_transactions_por_metodo()
-    df_cli_raw = load_transactions_clientes_por_mes()
+    df_raw       = load_transactions_por_metodo()
+    df_cli_raw   = load_transactions_clientes_por_mes()
+    df_interm_raw = load_intermediacao_mensal()
 
 if df_raw.empty:
     no_data("Nenhum dado de transação encontrado.")
@@ -91,6 +93,8 @@ df_cli = df_cli_raw[
     df_cli_raw["tipo"].isin(selected_tipos)
 ].copy()
 df_cli = filter_months(df_cli, n_months, "mes")
+
+df_interm = filter_months(df_interm_raw, n_months, "mes")
 
 if df.empty:
     no_data("Nenhuma transação com os filtros selecionados.")
@@ -309,6 +313,97 @@ else:
                 xaxis=dict(categoryorder="array", categoryarray=x_order_ct, type="category"),
             )
             st.plotly_chart(chart_layout(fig, height=360, legend_bottom=True), use_container_width=True)
+
+st.divider()
+
+# ─────────────────────────────────────────────
+# SEÇÃO 5 — Take Rate (Intermediação / TPV)
+# ─────────────────────────────────────────────
+st.subheader("Take Rate — Intermediação de Negócios / TPV")
+
+if df_interm.empty or df_total.empty:
+    no_data("Sem dados suficientes para calcular o Take Rate.")
+else:
+    # Merge intermediação com TPV por mês
+    df_tr = df_total[["mes", "total_value"]].copy().rename(columns={"total_value": "tpv"})
+    df_tr = df_tr.merge(
+        df_interm[["mes", "receita_intermediacao"]],
+        on="mes", how="left"
+    )
+    df_tr["receita_intermediacao"] = df_tr["receita_intermediacao"].fillna(0)
+    df_tr["take_rate_pct"] = (
+        df_tr["receita_intermediacao"] / df_tr["tpv"].where(df_tr["tpv"] > 0) * 100
+    ).round(4)
+    df_tr = df_tr.sort_values("mes")
+
+    # ── Snapshot do mês atual ─────────────────
+    curr_tr  = last_val(df_tr, "take_rate_pct", "mes")
+    prev_tr  = prev_val(df_tr, "take_rate_pct", "mes")
+    curr_int = last_val(df_tr, "receita_intermediacao", "mes")
+    prev_int = prev_val(df_tr, "receita_intermediacao", "mes")
+    curr_tpv = last_val(df_tr, "tpv", "mes")
+    prev_tpv = prev_val(df_tr, "tpv", "mes")
+
+    sn1, sn2, sn3 = st.columns(3)
+    with sn1:
+        st.metric(
+            "Take Rate — Mês Atual",
+            f"{curr_tr:.4f}%" if curr_tr is not None else "—",
+            delta=delta_str(curr_tr, prev_tr, fmt="+.4f", suffix=" p.p."),
+        )
+    with sn2:
+        st.metric(
+            "Intermediação (R$)",
+            f"R$ {curr_int:,.2f}" if curr_int is not None else "—",
+            delta=delta_str(curr_int, prev_int, fmt="+,.2f", suffix=" R$"),
+        )
+    with sn3:
+        st.metric(
+            "TPV — Mês Atual (R$)",
+            f"R$ {curr_tpv:,.2f}" if curr_tpv is not None else "—",
+            delta=delta_str(curr_tpv, prev_tpv, fmt="+,.2f", suffix=" R$"),
+        )
+
+    st.markdown("")
+
+    # ── Gráfico: Take Rate (linha) + Intermediação (barra) ───
+    df_tr_fmt, x_order_tr = mes_fmt_ordered(df_tr)
+    col_tr_a, col_tr_b = st.columns(2)
+
+    with col_tr_a:
+        st.subheader("Take Rate (%) — Evolução Mensal")
+        fig = go.Figure()
+        fig.add_scatter(
+            x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["take_rate_pct"],
+            name="Take Rate (%)", mode="lines+markers",
+            line=dict(color=PALETTE[0], width=2.5),
+            marker=dict(size=7),
+            hovertemplate="<b>%{x}</b><br>Take Rate: %{y:.4f}%<extra></extra>",
+        )
+        fig.update_layout(
+            xaxis=dict(categoryorder="array", categoryarray=x_order_tr, type="category"),
+            yaxis=dict(ticksuffix="%"),
+        )
+        st.plotly_chart(chart_layout(fig, height=360), use_container_width=True)
+
+    with col_tr_b:
+        st.subheader("Intermediação (R$) e TPV — Mensal")
+        fig = go.Figure()
+        fig.add_bar(
+            x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["tpv"],
+            name="TPV (R$)", marker_color=PALETTE[3], opacity=0.7, yaxis="y",
+            hovertemplate="<b>%{x}</b><br>TPV: R$ %{y:,.2f}<extra></extra>",
+        )
+        fig.add_bar(
+            x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["receita_intermediacao"],
+            name="Intermediação (R$)", marker_color=PALETTE[0], yaxis="y",
+            hovertemplate="<b>%{x}</b><br>Intermediação: R$ %{y:,.2f}<extra></extra>",
+        )
+        fig.update_layout(
+            barmode="overlay",
+            xaxis=dict(categoryorder="array", categoryarray=x_order_tr, type="category"),
+        )
+        st.plotly_chart(chart_layout(fig, height=360, legend_bottom=True), use_container_width=True)
 
 st.divider()
 

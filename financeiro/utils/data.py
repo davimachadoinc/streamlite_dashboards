@@ -405,6 +405,32 @@ def load_transactions_por_metodo() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
+def load_intermediacao_mensal() -> pd.DataFrame:
+    """
+    Receita de Intermediação de Negócios (comp_st_conta_cont = '1.2.4') por mês.
+    Fonte: BQ_BI — splgc-cobrancas_competencia-all.
+    Usada para calcular Take Rate = Intermediação / TPV.
+    """
+    query = """
+    SELECT
+      DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH) AS mes,
+      SUM(comp_valor)                                                    AS receita_intermediacao,
+      SUM(CASE WHEN fl_status_recb = '1' THEN comp_valor ELSE 0 END)    AS receita_intermediacao_paga
+    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+    WHERE comp_st_conta_cont = '1.2.4'
+      AND comp_valor > 0
+      AND CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
+    GROUP BY 1
+    ORDER BY 1
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+    return df
+
+
+@st.cache_data(ttl=3600)
 def load_transactions_clientes_por_mes() -> pd.DataFrame:
     """
     Clientes únicos (tertiarygroup_id) transacionando por mês, canal e tipo (doacao/outros).
