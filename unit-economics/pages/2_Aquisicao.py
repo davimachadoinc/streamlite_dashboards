@@ -271,6 +271,7 @@ else:
         "company_name", "channel", "plan", "sales_owner",
         "first_payment", "mrr_fechado", "mrr_atual", "delta", "variacao_pct",
     ]].copy()
+    df_tab = df_tab[df_tab["company_name"].notna() & (df_tab["company_name"].str.strip() != "")]
     df_tab = df_tab.sort_values("delta")
     df_tab = df_tab.rename(columns={
         "company_name":  "Cliente",
@@ -283,7 +284,6 @@ else:
         "delta":         "Delta",
         "variacao_pct":  "Var%",
     })
-    df_tab["Data Fechamento"] = df_tab["Data Fechamento"].dt.strftime("%d/%m/%Y")
 
     currency_cols = ["MRR Fechado", "MRR Atual", "Delta"]
     st.dataframe(
@@ -292,7 +292,8 @@ else:
         hide_index=True,
         column_config={
             **{c: st.column_config.NumberColumn(format="R$ %,.0f") for c in currency_cols},
-            "Var%": st.column_config.NumberColumn(format="%.1f%%"),
+            "Var%":            st.column_config.NumberColumn(format="%.1f%%"),
+            "Data Fechamento": st.column_config.DateColumn(format="DD/MM/YYYY"),
         },
     )
 
