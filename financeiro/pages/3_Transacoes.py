@@ -20,7 +20,7 @@ from utils.data import (
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
     load_transactions_por_metodo, load_transactions_clientes_por_mes,
-    load_intermediacao_mensal, load_take_rate_snapshot,
+    load_intermediacao_mensal, load_take_rate_snapshot, load_take_rate_historico,
 )
 
 inject_css()
@@ -52,6 +52,7 @@ with st.spinner("Carregando dados de transações..."):
     df_cli_raw    = load_transactions_clientes_por_mes()
     df_interm_raw = load_intermediacao_mensal()
     snap_tr       = load_take_rate_snapshot()
+    df_tr_hist    = load_take_rate_historico()
 
 if df_raw.empty:
     no_data("Nenhum dado de transação encontrado.")
@@ -322,28 +323,19 @@ st.divider()
 # ─────────────────────────────────────────────
 st.subheader("Take Rate — Intermediação de Negócios / TPV")
 
-if df_interm.empty or df_total.empty:
+if snap_tr == {} and df_tr_hist.empty:
     no_data("Sem dados suficientes para calcular o Take Rate.")
 else:
-    # Merge intermediação com TPV por mês
-    df_tr = df_total[["mes", "total_value"]].copy().rename(columns={"total_value": "tpv"})
-    df_tr = df_tr.merge(
-        df_interm[["mes", "receita_intermediacao"]],
-        on="mes", how="left"
-    )
-    df_tr["receita_intermediacao"] = df_tr["receita_intermediacao"].fillna(0)
-    df_tr["take_rate_pct"] = (
-        df_tr["receita_intermediacao"] / df_tr["tpv"].where(df_tr["tpv"] > 0) * 100
-    ).round(4)
-    df_tr = df_tr.sort_values("mes")
-
-    # ── Snapshot — último dia de liquidação ───
+    # ── Snapshot — intermediação do mês / TPV do último dia de liquidação ───
     snap_dia = snap_tr.get("dia", "—")
     snap_int = snap_tr.get("receita_intermediacao")
     snap_tpv = snap_tr.get("tpv")
     snap_pct = snap_tr.get("take_rate_pct")
 
-    st.caption(f"Snapshot baseado no último dia de liquidação de intermediação: **{snap_dia}**")
+    st.caption(
+        f"Snapshot: intermediação liquidada no mês atual · "
+        f"TPV do último dia de liquidação: **{snap_dia}**"
+    )
 
     sn1, sn2, sn3 = st.columns(3)
     with sn1:
@@ -353,55 +345,61 @@ else:
         )
     with sn2:
         st.metric(
-            "Intermediação Liquidada (R$)",
+            "Intermediação Liquidada no Mês (R$)",
             f"R$ {snap_int:,.2f}" if snap_int is not None else "—",
         )
     with sn3:
         st.metric(
-            "TPV no Dia (R$)",
+            "TPV no Último Dia de Liquidação (R$)",
             f"R$ {snap_tpv:,.2f}" if snap_tpv is not None else "—",
         )
 
     st.markdown("")
 
-    # ── Gráfico: Take Rate (linha) + Intermediação (barra) ───
-    df_tr_fmt, x_order_tr = mes_fmt_ordered(df_tr)
-    col_tr_a, col_tr_b = st.columns(2)
+    # ── Gráficos históricos — regra: último dia de liquidação por mês ───
+    df_tr_hist_f = filter_months(df_tr_hist, n_months, "mes")
 
-    with col_tr_a:
-        st.subheader("Take Rate (%) — Evolução Mensal")
-        fig = go.Figure()
-        fig.add_scatter(
-            x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["take_rate_pct"],
-            name="Take Rate (%)", mode="lines+markers",
-            line=dict(color=PALETTE[0], width=2.5),
-            marker=dict(size=7),
-            hovertemplate="<b>%{x}</b><br>Take Rate: %{y:.4f}%<extra></extra>",
-        )
-        fig.update_layout(
-            xaxis=dict(categoryorder="array", categoryarray=x_order_tr, type="category"),
-            yaxis=dict(ticksuffix="%"),
-        )
-        st.plotly_chart(chart_layout(fig, height=360), use_container_width=True)
+    if df_tr_hist_f.empty:
+        no_data("Sem histórico de take rate para o período.")
+    else:
+        df_tr_fmt, x_order_tr = mes_fmt_ordered(df_tr_hist_f)
+        col_tr_a, col_tr_b = st.columns(2)
 
-    with col_tr_b:
-        st.subheader("Intermediação (R$) e TPV — Mensal")
-        fig = go.Figure()
-        fig.add_bar(
-            x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["tpv"],
-            name="TPV (R$)", marker_color=PALETTE[3], opacity=0.7, yaxis="y",
-            hovertemplate="<b>%{x}</b><br>TPV: R$ %{y:,.2f}<extra></extra>",
-        )
-        fig.add_bar(
-            x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["receita_intermediacao"],
-            name="Intermediação (R$)", marker_color=PALETTE[0], yaxis="y",
-            hovertemplate="<b>%{x}</b><br>Intermediação: R$ %{y:,.2f}<extra></extra>",
-        )
-        fig.update_layout(
-            barmode="overlay",
-            xaxis=dict(categoryorder="array", categoryarray=x_order_tr, type="category"),
-        )
-        st.plotly_chart(chart_layout(fig, height=360, legend_bottom=True), use_container_width=True)
+        with col_tr_a:
+            st.subheader("Take Rate (%) — Evolução Mensal")
+            fig = go.Figure()
+            fig.add_scatter(
+                x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["take_rate_pct"],
+                name="Take Rate (%)", mode="lines+markers",
+                line=dict(color=PALETTE[0], width=2.5),
+                marker=dict(size=7),
+                hovertemplate="<b>%{x}</b><br>Take Rate: %{y:.4f}%<br>Ref: %{customdata}<extra></extra>",
+                customdata=df_tr_fmt["dia_ref"],
+            )
+            fig.update_layout(
+                xaxis=dict(categoryorder="array", categoryarray=x_order_tr, type="category"),
+                yaxis=dict(ticksuffix="%"),
+            )
+            st.plotly_chart(chart_layout(fig, height=360), use_container_width=True)
+
+        with col_tr_b:
+            st.subheader("Intermediação (R$) e TPV do Dia — Mensal")
+            fig = go.Figure()
+            fig.add_bar(
+                x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["tpv"],
+                name="TPV do Dia (R$)", marker_color=PALETTE[3], opacity=0.7,
+                hovertemplate="<b>%{x}</b><br>TPV: R$ %{y:,.2f}<extra></extra>",
+            )
+            fig.add_bar(
+                x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["receita_intermediacao"],
+                name="Intermediação (R$)", marker_color=PALETTE[0],
+                hovertemplate="<b>%{x}</b><br>Intermediação: R$ %{y:,.2f}<extra></extra>",
+            )
+            fig.update_layout(
+                barmode="overlay",
+                xaxis=dict(categoryorder="array", categoryarray=x_order_tr, type="category"),
+            )
+            st.plotly_chart(chart_layout(fig, height=360, legend_bottom=True), use_container_width=True)
 
 st.divider()
 
