@@ -20,7 +20,7 @@ from utils.data import (
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
     load_transactions_por_metodo, load_transactions_clientes_por_mes,
-    load_intermediacao_mensal,
+    load_intermediacao_mensal, load_take_rate_snapshot,
 )
 
 inject_css()
@@ -48,9 +48,10 @@ with col_filter:
 
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando dados de transações..."):
-    df_raw       = load_transactions_por_metodo()
-    df_cli_raw   = load_transactions_clientes_por_mes()
+    df_raw        = load_transactions_por_metodo()
+    df_cli_raw    = load_transactions_clientes_por_mes()
     df_interm_raw = load_intermediacao_mensal()
+    snap_tr       = load_take_rate_snapshot()
 
 if df_raw.empty:
     no_data("Nenhum dado de transação encontrado.")
@@ -336,32 +337,29 @@ else:
     ).round(4)
     df_tr = df_tr.sort_values("mes")
 
-    # ── Snapshot do mês atual ─────────────────
-    curr_tr  = last_val(df_tr, "take_rate_pct", "mes")
-    prev_tr  = prev_val(df_tr, "take_rate_pct", "mes")
-    curr_int = last_val(df_tr, "receita_intermediacao", "mes")
-    prev_int = prev_val(df_tr, "receita_intermediacao", "mes")
-    curr_tpv = last_val(df_tr, "tpv", "mes")
-    prev_tpv = prev_val(df_tr, "tpv", "mes")
+    # ── Snapshot — último dia de liquidação ───
+    snap_dia = snap_tr.get("dia", "—")
+    snap_int = snap_tr.get("receita_intermediacao")
+    snap_tpv = snap_tr.get("tpv")
+    snap_pct = snap_tr.get("take_rate_pct")
+
+    st.caption(f"Snapshot baseado no último dia de liquidação de intermediação: **{snap_dia}**")
 
     sn1, sn2, sn3 = st.columns(3)
     with sn1:
         st.metric(
-            "Take Rate — Mês Atual",
-            f"{curr_tr:.4f}%" if curr_tr is not None else "—",
-            delta=delta_str(curr_tr, prev_tr, fmt="+.4f", suffix=" p.p."),
+            "Take Rate",
+            f"{snap_pct:.4f}%" if snap_pct is not None else "—",
         )
     with sn2:
         st.metric(
-            "Intermediação (R$)",
-            f"R$ {curr_int:,.2f}" if curr_int is not None else "—",
-            delta=delta_str(curr_int, prev_int, fmt="+,.2f", suffix=" R$"),
+            "Intermediação Liquidada (R$)",
+            f"R$ {snap_int:,.2f}" if snap_int is not None else "—",
         )
     with sn3:
         st.metric(
-            "TPV — Mês Atual (R$)",
-            f"R$ {curr_tpv:,.2f}" if curr_tpv is not None else "—",
-            delta=delta_str(curr_tpv, prev_tpv, fmt="+,.2f", suffix=" R$"),
+            "TPV no Dia (R$)",
+            f"R$ {snap_tpv:,.2f}" if snap_tpv is not None else "—",
         )
 
     st.markdown("")

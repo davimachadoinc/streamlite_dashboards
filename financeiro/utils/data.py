@@ -405,6 +405,57 @@ def load_transactions_por_metodo() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
+def load_take_rate_snapshot() -> dict:
+    """
+    Snapshot do take rate no último dia de liquidação de intermediação de negócios.
+    Passo 1: encontra MAX(dt_liquidacao_recb) para comp_st_conta_cont = '1.2.4' (BQ_BI).
+    Passo 2: soma TPV de view_transaction nesse mesmo dia (BQ_TECH).
+    Retorna dict com: dia, receita_intermediacao, tpv, take_rate_pct.
+    """
+    q_interm = """
+    SELECT
+      CAST(dt_liquidacao_recb AS DATE) AS dia_liquidacao,
+      SUM(comp_valor) AS receita_intermediacao
+    FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+    WHERE comp_st_conta_cont = '1.2.4'
+      AND fl_status_recb = '1'
+      AND dt_liquidacao_recb IS NOT NULL
+    GROUP BY 1
+    ORDER BY 1 DESC
+    LIMIT 1
+    """
+    df_interm = _bq_query(q_interm, "bigquery_bi")
+    if df_interm.empty:
+        return {}
+
+    dia = df_interm["dia_liquidacao"].iloc[0]
+    dia_str = str(dia)[:10]  # garante formato YYYY-MM-DD
+    receita_intermediacao = float(df_interm["receita_intermediacao"].iloc[0])
+
+    q_tpv = f"""
+    SELECT SUM(value) AS tpv
+    FROM `inchurch-gcp.backend_bi.view_transaction`
+    WHERE status IN ('active', 'payed')
+      AND method NOT IN ('free', 'external', 'debit')
+      AND CAST(datetime AS DATE) = DATE '{dia_str}'
+    """
+    df_tpv = _bq_query(q_tpv, "bigquery_tech")
+    tpv = (
+        float(df_tpv["tpv"].iloc[0])
+        if not df_tpv.empty and df_tpv["tpv"].iloc[0] is not None
+        else 0.0
+    )
+    take_rate_pct = (receita_intermediacao / tpv * 100) if tpv > 0 else None
+
+    return {
+        "dia": dia_str,
+        "receita_intermediacao": receita_intermediacao,
+        "tpv": tpv,
+        "take_rate_pct": take_rate_pct,
+    }
+
+
+@st.cache_data(ttl=3600)
 def load_intermediacao_mensal() -> pd.DataFrame:
     """
     Receita de Intermediação de Negócios (comp_st_conta_cont = '1.2.4') por mês.
