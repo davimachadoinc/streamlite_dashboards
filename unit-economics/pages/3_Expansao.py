@@ -1,13 +1,13 @@
 """
 pages/3_📈_Expansao.py
-Expansion MRR, upsells por módulo, attach rate e timing.
+Expansion MRR, upsells por módulo, detalhamento de upgrades, attach rate e timing.
 """
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="Expansão | Unit Economics", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Expansão | Unit Economics", layout="wide")
 
 if "auth" in st.secrets and not st.user.is_logged_in:
     st.error("⛔ Acesso não autorizado.")
@@ -22,7 +22,7 @@ from utils.data import (
     last_val, prev_val, delta_str, fmt_brl, no_data,
     load_mrr_waterfall, load_expansion_por_modulo,
     load_module_attach_rate, load_upsell_timing,
-    load_expansion_detalhado,
+    load_expansion_detalhado, load_upgrade_detalhado,
 )
 
 inject_css()
@@ -47,39 +47,28 @@ Renovações são excluídas: se um produto encerrou no último dia do mês X e 
 ---
 
 #### KPIs do topo
-| Métrica | O que é | Como é calculado |
-|---|---|---|
-| **Expansion MRR** | MRR adicional gerado por clientes já existentes | Soma de `valor_total` de produtos novos ativados por clientes com histórico anterior |
-| **Clientes Expandidos** | Clientes que fizeram ao menos um upsell no mês | `COUNT(DISTINCT st_sincro_sac)` com expansion no mês |
-| **Attach Kids** | % da base ativa que possui o módulo Kids | `Clientes com Kids ativos ÷ Total de clientes ativos` no último mês |
-| **Attach Jornada** | % da base ativa que possui o módulo Jornada | Idem, para Jornada |
-| **Tempo médio ao upsell** | Dias entre a entrada do cliente e o primeiro upsell | Média ponderada por número de clientes em cada faixa de tempo |
+| Métrica | O que é |
+|---|---|
+| **Expansion MRR** | MRR adicional de clientes existentes |
+| **Clientes Expandidos** | Clientes com ao menos um upsell no mês |
+| **Attach Kids / Jornada** | % da base ativa com o módulo |
+| **Tempo médio ao upsell** | Dias entre entrada do cliente e primeiro upsell |
 
 ---
 
-#### Expansion MRR por Tipo
-Barras empilhadas mostrando quanto cada tipo de upsell contribuiu para a expansion:
-- **Kids, Jornada, Loja Inteligente, Totem** — módulos adicionais contratados
-- **Upgrade de Plano** — mudança de faixa ou plano base (ex: Lite → Pro)
+#### Detalhamento de Upgrades de Plano
+Para os eventos de expansion classificados como "Upgrade de Plano", identifica o que mudou:
+- **Mudança de Plano** — ex: Lite → Pro, Starter → Lite
+- **Mudança de Faixa** — mesmo plano, faixa de membros maior (ex: Lite 1-100 → Lite 101-300)
+- **Novo sem anterior** — novo plano contratado sem plano anterior identificável no período
 
-A pizza ao lado mostra a composição do último mês.
+A lógica compara o plano/faixa que o cliente tinha até 60 dias antes com o novo plano ativado.
 
 #### Attach Rate por Módulo
-Percentual da base ativa que possui cada módulo, evolução mês a mês.
 `Attach Rate = Clientes com módulo ativo ÷ Total de clientes ativos`
 
-> Um attach rate crescente indica que o módulo está sendo bem adotado pela base — sinal positivo de expansão orgânica.
-
 #### Distribuição — Dias até Primeiro Upsell
-Histograma mostrando quanto tempo os clientes levam para fazer o primeiro upsell após a entrada.
-- Faixas: ≤30d · 31-60d · 61-90d · 3-6m · 6-12m · 1-2a · >2a
-- A tabela de estatísticas ao lado traz média, mediana e percentuais por faixa.
-
-> Quanto mais concentrado nas faixas curtas (≤90d), mais eficiente é o processo de upsell. Um volume alto em ">2a" indica que parte da base demora muito para expandir — ou nunca expande.
-
-#### Tabelas no rodapé
-- **Expansion MRR por Módulo** — dados mensais completos por tipo
-- **Clientes com Maior Expansion** — últimos 6 meses, por cliente e produto
+Histograma mostrando quanto tempo os clientes levam para o primeiro upsell após a entrada.
 """)
 
 # ── Carga ─────────────────────────────────────────────────────────────────────
@@ -89,36 +78,29 @@ with st.spinner("Carregando dados..."):
     df_attach  = load_module_attach_rate()
     df_timing  = load_upsell_timing()
     df_exp_det = load_expansion_detalhado()
-
-_last_closed_month = (pd.Timestamp.now().to_period("M") - 1).to_timestamp()
+    df_upgrade = load_upgrade_detalhado()
 
 df_wf_f      = filter_months(df_wf, n_months)
 df_exp_mod_f = filter_months(df_exp_mod, n_months)
 df_attach_f  = filter_months(df_attach, n_months)
-
-# Remove mês atual (incompleto) — exibe apenas até o mês anterior fechado
-df_wf_f      = df_wf_f[df_wf_f["mes"] <= _last_closed_month]
-df_exp_mod_f = df_exp_mod_f[df_exp_mod_f["mes"] <= _last_closed_month]
-df_attach_f  = df_attach_f[df_attach_f["mes"] <= _last_closed_month]
-df_exp_det_f = df_exp_det[df_exp_det["mes"] <= _last_closed_month]
+df_upgrade_f = filter_months(df_upgrade, n_months)
+df_exp_det_f = df_exp_det.copy()
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 st.subheader("Métricas de Expansão")
 k1, k2, k3, k4, k5 = st.columns(5)
 
-exp_mrr  = last_val(df_wf_f, "expansion_mrr")
+exp_mrr   = last_val(df_wf_f, "expansion_mrr")
 exp_mrr_p = prev_val(df_wf_f, "expansion_mrr")
-exp_cl   = last_val(df_wf_f, "expanded_clients")
-exp_cl_p = prev_val(df_wf_f, "expanded_clients")
+exp_cl    = last_val(df_wf_f, "expanded_clients")
+exp_cl_p  = prev_val(df_wf_f, "expanded_clients")
 
-# Attach rates do último mês
 if not df_attach_f.empty:
     ultimo_mes = df_attach_f["mes"].max()
     ar_last = df_attach_f[df_attach_f["mes"] == ultimo_mes].set_index("modulo")["attach_rate"]
 else:
     ar_last = pd.Series(dtype=float)
 
-# Tempo médio até primeiro upsell
 if not df_timing.empty:
     avg_dias = int(np.average(df_timing["dias_ate_upsell"], weights=df_timing["clientes"]))
 else:
@@ -170,7 +152,6 @@ with col_a:
         st.plotly_chart(chart_layout(fig, height=360, legend_bottom=True), use_container_width=True)
 
 with col_b:
-    # Pizza do último mês
     if not df_exp_mod_f.empty:
         ultimo_mes = df_exp_mod_f["mes"].max()
         df_pie = df_exp_mod_f[df_exp_mod_f["mes"] == ultimo_mes].copy()
@@ -193,7 +174,205 @@ with col_b:
 
 st.divider()
 
-# ── Gráfico 2: Attach Rate por módulo ao longo do tempo ──────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEÇÃO: DETALHAMENTO DE UPGRADES DE PLANO
+# ═══════════════════════════════════════════════════════════════════════════════
+st.subheader("Detalhamento de Upgrades de Plano")
+
+TIPO_UPGRADE_LABELS = {
+    "mudanca_plano":     "Mudança de Plano",
+    "mudanca_faixa":     "Mudança de Faixa",
+    "novo_sem_anterior": "Novo (sem anterior)",
+    "outro":             "Outro",
+}
+TIPO_UPGRADE_COLORS = {
+    "mudanca_plano":     PALETTE[0],
+    "mudanca_faixa":     PALETTE[1],
+    "novo_sem_anterior": PALETTE[3],
+    "outro":             PALETTE[4],
+}
+
+PLAN_LABELS_EXT = {
+    "pro":          "PRO",
+    "lite":         "LITE",
+    "starter":      "STARTER",
+    "basic":        "BASIC",
+    "filha":        "FILHA",
+    "squad":        "Squad",
+    "outros":       "Outros",
+    "sem_anterior": "—",
+}
+
+if df_upgrade_f.empty:
+    no_data("Nenhum upgrade de plano encontrado no período.")
+else:
+    # KPIs de upgrade
+    n_upgrades     = len(df_upgrade_f)
+    mrr_upgrades   = df_upgrade_f["delta_mrr"].sum()
+    n_plan_change  = (df_upgrade_f["tipo_upgrade"] == "mudanca_plano").sum()
+    n_faixa_change = (df_upgrade_f["tipo_upgrade"] == "mudanca_faixa").sum()
+
+    uk1, uk2, uk3, uk4 = st.columns(4)
+    with uk1:
+        st.metric("Total Upgrades", f"{n_upgrades:,}".replace(",", "."))
+    with uk2:
+        st.metric("Mudanças de Plano", f"{n_plan_change:,}".replace(",", "."))
+    with uk3:
+        st.metric("Mudanças de Faixa", f"{n_faixa_change:,}".replace(",", "."))
+    with uk4:
+        st.metric("Delta MRR de Upgrades", f"R$ {fmt_brl(mrr_upgrades)}")
+
+    # ── Gráfico: upgrades por tipo ao longo do tempo ──────────────────────────
+    col_u1, col_u2 = st.columns([3, 2])
+
+    with col_u1:
+        df_up_mes = (
+            df_upgrade_f.groupby(["mes", "tipo_upgrade"], as_index=False)
+            .agg(qtd=("cliente_id", "count"), delta=("delta_mrr", "sum"))
+        )
+        df_up_base = df_upgrade_f.groupby("mes", as_index=False)["delta_mrr"].sum()
+        df_up_base, x_order_up = mes_fmt_ordered(df_up_base)
+
+        fig = go.Figure()
+        for tipo in ["mudanca_plano", "mudanca_faixa", "novo_sem_anterior", "outro"]:
+            sub = df_up_mes[df_up_mes["tipo_upgrade"] == tipo].copy()
+            if sub.empty:
+                continue
+            sub, _ = mes_fmt_ordered(sub)
+            fig.add_bar(
+                x=sub["mes_fmt"], y=sub["delta"],
+                name=TIPO_UPGRADE_LABELS.get(tipo, tipo),
+                marker_color=TIPO_UPGRADE_COLORS.get(tipo, PALETTE[3]),
+                customdata=sub["qtd"],
+                hovertemplate=f"<b>{TIPO_UPGRADE_LABELS.get(tipo, tipo)}</b><br>R$ %{{y:,.0f}} | %{{customdata}} clientes<extra></extra>",
+            )
+        fig.update_layout(
+            barmode="stack",
+            xaxis=dict(categoryorder="array", categoryarray=x_order_up, type="category"),
+        )
+        st.plotly_chart(chart_layout(fig, height=340, legend_bottom=True), use_container_width=True)
+
+    with col_u2:
+        # Pizza por tipo_upgrade no período
+        df_tipo_pie = (
+            df_upgrade_f.groupby("tipo_upgrade", as_index=False)
+            .agg(delta=("delta_mrr", "sum"), qtd=("cliente_id", "count"))
+        )
+        df_tipo_pie = df_tipo_pie[df_tipo_pie["delta"] > 0]
+        if not df_tipo_pie.empty:
+            fig = go.Figure(go.Pie(
+                labels=df_tipo_pie["tipo_upgrade"].map(TIPO_UPGRADE_LABELS),
+                values=df_tipo_pie["delta"],
+                hole=0.45,
+                marker_colors=[TIPO_UPGRADE_COLORS.get(t, PALETTE[3]) for t in df_tipo_pie["tipo_upgrade"]],
+                textfont=dict(size=11, family="Outfit"),
+            ))
+            fig.update_traces(
+                texttemplate="%{label}<br>%{percent}",
+                hovertemplate="<b>%{label}</b><br>R$ %{value:,.0f} (%{percent})<extra></extra>",
+            )
+            st.plotly_chart(chart_layout(fig, height=340), use_container_width=True)
+            st.caption("Delta MRR por tipo de upgrade no período")
+
+    # ── Tabela de fluxos: Plano Antigo → Plano Novo ───────────────────────────
+    col_f1, col_f2 = st.columns(2)
+
+    with col_f1:
+        st.markdown("##### Fluxos de Mudança de Plano")
+        df_plano_flow = (
+            df_upgrade_f[df_upgrade_f["tipo_upgrade"] == "mudanca_plano"]
+            .groupby(["plano_antigo", "plano_novo"], as_index=False)
+            .agg(qtd=("cliente_id", "count"), delta_mrr=("delta_mrr", "sum"))
+            .sort_values("delta_mrr", ascending=False)
+        )
+        if df_plano_flow.empty:
+            no_data("Nenhuma mudança de plano no período.")
+        else:
+            df_plano_flow["plano_antigo"] = df_plano_flow["plano_antigo"].map(
+                lambda x: PLAN_LABELS_EXT.get(x, x.upper())
+            )
+            df_plano_flow["plano_novo"] = df_plano_flow["plano_novo"].map(
+                lambda x: PLAN_LABELS_EXT.get(x, x.upper())
+            )
+            df_plano_flow = df_plano_flow.rename(columns={
+                "plano_antigo": "De",
+                "plano_novo":   "Para",
+                "qtd":          "Upgrades",
+                "delta_mrr":    "Delta MRR",
+            })
+            st.dataframe(
+                df_plano_flow,
+                use_container_width=True,
+                hide_index=True,
+                column_config={"Delta MRR": st.column_config.NumberColumn(format="R$ %,.0f")},
+            )
+
+    with col_f2:
+        st.markdown("##### Fluxos de Mudança de Faixa")
+        df_faixa_flow = (
+            df_upgrade_f[df_upgrade_f["tipo_upgrade"] == "mudanca_faixa"]
+            .groupby(["plano_novo", "faixa_antiga", "faixa_nova"], as_index=False)
+            .agg(qtd=("cliente_id", "count"), delta_mrr=("delta_mrr", "sum"))
+            .sort_values("delta_mrr", ascending=False)
+        )
+        if df_faixa_flow.empty:
+            no_data("Nenhuma mudança de faixa no período.")
+        else:
+            df_faixa_flow["plano_novo"] = df_faixa_flow["plano_novo"].map(
+                lambda x: PLAN_LABELS_EXT.get(x, x.upper())
+            )
+            df_faixa_flow = df_faixa_flow.rename(columns={
+                "plano_novo":  "Plano",
+                "faixa_antiga": "Faixa Anterior",
+                "faixa_nova":   "Faixa Nova",
+                "qtd":          "Upgrades",
+                "delta_mrr":    "Delta MRR",
+            })
+            st.dataframe(
+                df_faixa_flow,
+                use_container_width=True,
+                hide_index=True,
+                column_config={"Delta MRR": st.column_config.NumberColumn(format="R$ %,.0f")},
+            )
+
+    # ── Tabela detalhada de upgrades ──────────────────────────────────────────
+    with st.expander("🔍 Detalhes por Cliente"):
+        df_det_up = df_upgrade_f.sort_values(["mes", "delta_mrr"], ascending=[False, False]).copy()
+        df_det_up["mes"] = df_det_up["mes"].dt.strftime("%b/%y").str.capitalize()
+        df_det_up["tipo_upgrade"] = df_det_up["tipo_upgrade"].map(TIPO_UPGRADE_LABELS).fillna(df_det_up["tipo_upgrade"])
+        df_det_up["plano_antigo"] = df_det_up["plano_antigo"].map(lambda x: PLAN_LABELS_EXT.get(x, x.upper()))
+        df_det_up["plano_novo"]   = df_det_up["plano_novo"].map(lambda x: PLAN_LABELS_EXT.get(x, x.upper()))
+        df_det_up = df_det_up.rename(columns={
+            "mes":          "Mês",
+            "cliente_id":   "ID Cliente",
+            "prd_antigo":   "Produto Anterior",
+            "prd_novo":     "Produto Novo",
+            "mrr_antigo":   "MRR Anterior",
+            "mrr_novo":     "MRR Novo",
+            "delta_mrr":    "Delta MRR",
+            "plano_antigo": "Plano Ant.",
+            "plano_novo":   "Plano Novo",
+            "faixa_antiga": "Faixa Ant.",
+            "faixa_nova":   "Faixa Nova",
+            "tipo_upgrade": "Tipo",
+        })
+        st.dataframe(
+            df_det_up[[
+                "Mês", "ID Cliente", "Tipo",
+                "Plano Ant.", "Plano Novo", "Faixa Ant.", "Faixa Nova",
+                "MRR Anterior", "MRR Novo", "Delta MRR",
+            ]],
+            use_container_width=True, hide_index=True,
+            column_config={
+                "MRR Anterior": st.column_config.NumberColumn(format="R$ %,.0f"),
+                "MRR Novo":     st.column_config.NumberColumn(format="R$ %,.0f"),
+                "Delta MRR":    st.column_config.NumberColumn(format="R$ %,.0f"),
+            },
+        )
+
+st.divider()
+
+# ── Gráfico 2: Attach Rate por módulo ────────────────────────────────────────
 st.subheader("Attach Rate por Módulo")
 
 if df_attach_f.empty:
@@ -211,7 +390,7 @@ else:
             mode="lines+markers",
             line=dict(color=MODULE_COLORS.get(modulo, PALETTE[3]), width=2.5),
             marker=dict(size=7),
-            hovertemplate=f"<b>{MODULE_LABELS.get(modulo, modulo)}</b><br>%{{y:.1f}}% ({{}}/{{}}) clientes<extra></extra>",
+            hovertemplate=f"<b>{MODULE_LABELS.get(modulo, modulo)}</b><br>%{{y:.1f}}%<extra></extra>",
         )
     fig.update_layout(
         yaxis=dict(ticksuffix="%"),
@@ -230,7 +409,6 @@ with col_hist:
     if df_timing.empty:
         no_data()
     else:
-        # Agrupa por faixa de 30 dias
         df_t = df_timing.copy()
         df_t["faixa"] = pd.cut(
             df_t["dias_ate_upsell"],
@@ -238,7 +416,6 @@ with col_hist:
             labels=["≤30d", "31-60d", "61-90d", "3-6m", "6-12m", "1-2a", ">2a"],
         )
         faixa_agg = df_t.groupby("faixa", observed=True)["clientes"].sum().reset_index()
-
         fig = go.Figure()
         fig.add_bar(
             x=faixa_agg["faixa"].astype(str),
@@ -261,14 +438,13 @@ with col_stats:
         mediana = int(np.median(
             np.repeat(df_t["dias_ate_upsell"].values, df_t["clientes"].values)
         ))
-
         st.markdown("#### Estatísticas")
         stats = {
-            "Clientes com upsell":   f"{total_upsell:,}".replace(",", "."),
-            "Tempo médio":           f"{avg_dias} dias" if avg_dias else "—",
-            "Mediana":               f"{mediana} dias",
-            "Upsell em ≤90 dias":    f"{pct_menos_90:.1f}%",
-            "Upsell após 1 ano":     f"{pct_mais_365:.1f}%",
+            "Clientes com upsell": f"{total_upsell:,}".replace(",", "."),
+            "Tempo médio":         f"{avg_dias} dias" if avg_dias else "—",
+            "Mediana":             f"{mediana} dias",
+            "Upsell em ≤90 dias":  f"{pct_menos_90:.1f}%",
+            "Upsell após 1 ano":   f"{pct_mais_365:.1f}%",
         }
         for label, valor in stats.items():
             cols = st.columns([2, 2])
@@ -279,7 +455,7 @@ with col_stats:
 
 st.divider()
 
-# ── Tabela detalhada de expansão ──────────────────────────────────────────────
+# ── Tabelas no rodapé ─────────────────────────────────────────────────────────
 with st.expander("📋 Tabela de Expansion MRR por Módulo"):
     if df_exp_mod_f.empty:
         no_data()

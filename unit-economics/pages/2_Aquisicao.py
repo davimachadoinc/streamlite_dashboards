@@ -1,12 +1,13 @@
 """
 pages/2_🎯_Aquisicao.py
-Novos clientes, CAC, Payback e LTV:CAC.
+Fechamentos de vendas, comparação fechado vs MRR atual, CAC e Payback.
+Fonte principal: Fechamentos_com_ajustes (BQ_BI).
 """
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 
-st.set_page_config(page_title="Aquisição | Unit Economics", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Aquisição | Unit Economics", layout="wide")
 
 if "auth" in st.secrets and not st.user.is_logged_in:
     st.error("⛔ Acesso não autorizado.")
@@ -21,6 +22,7 @@ from utils.data import (
     last_val, prev_val, delta_str, fmt_brl, no_data,
     load_mrr_waterfall, load_new_logos_por_plano,
     load_despesas_cac, compute_cac_metrics,
+    load_fechamentos_vendas, load_fechamentos_vs_mrr_atual,
 )
 
 inject_css()
@@ -28,144 +30,151 @@ inject_css()
 # ── Header ────────────────────────────────────────────────────────────────────
 col_title, col_period = st.columns([8, 2], vertical_alignment="bottom")
 with col_title:
-    st.markdown("<h1>Aquisição <span>CAC & Payback</span></h1>", unsafe_allow_html=True)
+    st.markdown("<h1>Aquisição <span>Fechamentos & CAC</span></h1>", unsafe_allow_html=True)
 with col_period:
     n_months = period_selector("aquisicao")
 
 with st.expander("ℹ️ Como ler esta página"):
     st.markdown("""
-**Aquisição** mede o custo e a eficiência de trazer novos clientes — quanto se gasta, quantos chegam e se o investimento se paga.
+**Aquisição** tem duas visões complementares:
+
+1. **Fechamentos** — o que foi vendido, quando e por quem (fonte: `Fechamentos_com_ajustes`).
+2. **Fechado vs Atual** — compara o MRR contratado na venda com o MRR que o cliente paga hoje.
+3. **CAC & Payback** — custo de aquisição vs receita gerada.
 
 ---
 
-#### Definição de "novo cliente"
-Um cliente é contado como novo no mês em que o seu **primeiro produto ativo** no MRR começou (`MIN(dt_inicio_mens)`).
-Módulos adicionais (Kids, Jornada, Loja) e itens de Setup e PRO-RATA são ignorados — só o plano base entra na contagem.
+#### Fechamentos
+Registra todas as vendas (`first_payment` = data do primeiro boleto pago).
+Filtros de canal, produto e vendedor aplicam-se às seções 1 e 2.
 
-> ⚠️ Se um mês aparecer com volume anormalmente alto, pode indicar carga retroativa de dados no MRR — verifique se os clientes têm `dt_cadastro_sac` muito anterior à `dt_inicio_mens`.
-
----
-
-#### KPIs do topo
-| Métrica | O que é | Como é calculado |
-|---|---|---|
-| **Novos Clientes** | Clientes entrando pela primeira vez | `COUNT(DISTINCT st_sincro_sac)` com `dt_inicio_mens = dt_first` no mês |
-| **New Logo MRR** | MRR trazido pelos novos clientes | `SUM(valor_total)` de todos os produtos do cliente no mês de entrada |
-| **CAC** | Custo de Aquisição por Cliente | `Total de despesas de aquisição ÷ Novos clientes` do mês |
-| **Payback** | Meses para recuperar o CAC | `CAC ÷ ARPU` |
-| **LTV:CAC** | Razão entre valor gerado e custo de aquisição | `LTV ÷ CAC`. Meta: ≥ 3x |
-
----
-
-#### Novos Clientes por Mês
-Barras empilhadas por plano + linha de total. A pizza ao lado mostra a distribuição entre planos no último mês selecionado.
-
-#### CAC & Payback por Mês
-- **Barra** = custo total de aquisição (despesas liquidadas nos centros de custo abaixo)
-- **Linha sólida** = CAC por cliente (eixo direito)
-- **Linha pontilhada** = Payback em meses (eixo direito)
-
-#### Composição dos Custos de Aquisição
-Despesas liquidadas no mês, agrupadas por tipo:
-| Grupo | Centros de custo incluídos |
+#### Fechado vs Atual
+| Coluna | Significado |
 |---|---|
-| Comercial | Field Sales, Inbound, Sales, Outside Sales |
-| Marketing | Marketing |
-| Eventos & Parceiros | Eventos, Parceiros |
-| Outbound | Outbound |
+| **MRR Fechado** | Valor da mensalidade contratada na venda (`value`) |
+| **MRR Atual** | MRR ativo do cliente hoje no Superlógica (sem Setup/PRO-RATA) |
+| **Delta** | MRR Atual − MRR Fechado |
+| **Var%** | (Delta ÷ MRR Fechado) × 100 |
 
-> As despesas vêm de uma planilha no Drive (`despesas_liquidadas`) e são filtradas pelo mês de liquidação (não competência).
+> Delta negativo indica queda de receita em relação ao contrato original (churn parcial, downsell ou saída de módulos).
 
-#### LTV : CAC
-```
-ARPU          = MRR início ÷ Clientes ativos
-Churn rate    = MRR churned ÷ MRR início  (suavizado: média móvel 3 meses)
-LTV           = ARPU ÷ Churn rate suavizado
-Payback       = CAC ÷ ARPU
-LTV:CAC       = LTV ÷ CAC
-```
-Cor das barras: 🟢 ≥ 3x · 🟡 ≥ 1x · 🔴 < 1x.
-A tabela lateral detalha todos os componentes do último mês.
+#### CAC & Payback
+Baseado em despesas liquidadas do Google Drive + novos clientes do MRR (waterfall).
 """)
 
 # ── Carga ─────────────────────────────────────────────────────────────────────
 with st.spinner("Carregando dados..."):
-    df_wf       = load_mrr_waterfall()
-    df_new_plan = load_new_logos_por_plano()
-    df_desp     = load_despesas_cac()
+    df_fech    = load_fechamentos_vendas()
+    df_vs      = load_fechamentos_vs_mrr_atual()
+    df_wf      = load_mrr_waterfall()
+    df_desp    = load_despesas_cac()
 
-_last_closed_month = (pd.Timestamp.now().to_period("M") - 1).to_timestamp()
+df_cac = compute_cac_metrics(df_desp, df_wf)
 
-df_wf_f       = filter_months(df_wf, n_months)
-df_new_plan_f = filter_months(df_new_plan, n_months)
-df_desp_f     = filter_months(df_desp, n_months)
-df_cac        = compute_cac_metrics(df_desp, df_wf)
-df_cac_f      = filter_months(df_cac, n_months)
+# ── Sidebar — Filtros de Fechamentos ──────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### Filtros de Fechamento")
 
-# Remove mês atual (incompleto) — exibe apenas até o mês anterior fechado
-df_wf_f       = df_wf_f[df_wf_f["mes"] <= _last_closed_month]
-df_new_plan_f = df_new_plan_f[df_new_plan_f["mes"] <= _last_closed_month]
-df_desp_f     = df_desp_f[df_desp_f["mes"] <= _last_closed_month]
-df_cac_f      = df_cac_f[df_cac_f["mes"] <= _last_closed_month]
+    canais = ["Todos"] + sorted(df_fech["channel"].dropna().unique().tolist()) if not df_fech.empty else ["Todos"]
+    planos = ["Todos"] + sorted(df_fech["plan"].dropna().unique().tolist()) if not df_fech.empty else ["Todos"]
+    vendedores = ["Todos"] + sorted(df_fech["sales_owner"].dropna().unique().tolist()) if not df_fech.empty else ["Todos"]
 
-# ── KPIs ──────────────────────────────────────────────────────────────────────
-st.subheader("Métricas de Aquisição")
+    sel_canal    = st.selectbox("Canal", canais, key="fech_canal")
+    sel_plano    = st.selectbox("Produto / Plano", planos, key="fech_plano")
+    sel_vendedor = st.selectbox("Vendedor", vendedores, key="fech_vendedor")
+
+
+def _apply_filters(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if sel_canal != "Todos":
+        df = df[df["channel"] == sel_canal]
+    if sel_plano != "Todos":
+        df = df[df["plan"] == sel_plano]
+    if sel_vendedor != "Todos":
+        df = df[df["sales_owner"] == sel_vendedor]
+    return df
+
+
+df_fech_f = _apply_filters(filter_months(df_fech, n_months))
+df_vs_f   = _apply_filters(filter_months(df_vs,   n_months))
+df_wf_f   = filter_months(df_wf, n_months)
+df_cac_f  = filter_months(df_cac, n_months)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEÇÃO 1 — FECHAMENTOS
+# ═══════════════════════════════════════════════════════════════════════════════
+st.subheader("Fechamentos por Mês")
+
 k1, k2, k3, k4, k5 = st.columns(5)
 
-new_cl   = last_val(df_wf_f, "new_clients")
-new_cl_p = prev_val(df_wf_f, "new_clients")
-new_mrr  = last_val(df_wf_f, "new_logo_mrr")
-cac_v    = last_val(df_cac_f, "cac")
-cac_p    = prev_val(df_cac_f, "cac")
-pay_v    = last_val(df_cac_f, "payback_meses")
-ltv_cac  = last_val(df_cac_f, "ltv_cac")
+total_fech  = len(df_fech_f)
+mrr_total   = df_fech_f["mrr_fechado"].sum() if not df_fech_f.empty else 0
+fyv_total   = df_fech_f["FYV"].sum()         if not df_fech_f.empty else 0
+ticket_med  = mrr_total / total_fech          if total_fech > 0 else 0
+novos       = int(df_fech_f["new_deal"].sum()) if not df_fech_f.empty and "new_deal" in df_fech_f else 0
+upsells     = int(df_fech_f["upsell"].sum())   if not df_fech_f.empty and "upsell" in df_fech_f else 0
 
 with k1:
-    st.metric("Novos Clientes", f"{int(new_cl):,}".replace(",", ".") if new_cl else "—",
-              delta=delta_str(new_cl, new_cl_p, fmt="+,.0f"))
+    st.metric("Total Fechamentos", f"{total_fech:,}".replace(",", "."))
 with k2:
-    st.metric("New Logo MRR", f"R$ {fmt_brl(new_mrr)}" if new_mrr else "—")
+    st.metric("Novos / Upsell", f"{novos} / {upsells}")
 with k3:
-    st.metric("CAC", f"R$ {fmt_brl(cac_v)}" if cac_v else "—",
-              delta=delta_str(cac_v, cac_p, fmt="+,.0f", suffix=" R$"),
-              delta_color="inverse")
+    st.metric("MRR Fechado", f"R$ {fmt_brl(mrr_total)}")
 with k4:
-    st.metric("Payback", f"{pay_v:.1f} meses" if pay_v else "—")
+    st.metric("Ticket Médio (MRR)", f"R$ {fmt_brl(ticket_med)}" if ticket_med else "—")
 with k5:
-    st.metric("LTV:CAC", f"{ltv_cac:.1f}x" if ltv_cac else "—")
+    st.metric("FYV Total", f"R$ {fmt_brl(fyv_total)}")
 
 st.divider()
 
-# ── Gráfico 1: Novos clientes por plano ──────────────────────────────────────
-st.subheader("Novos Clientes por Mês")
-
+# ── Gráfico: Fechamentos por mês (new_deal vs upsell) ─────────────────────────
 col_a, col_b = st.columns([3, 2])
 
 with col_a:
-    if df_new_plan_f.empty:
+    if df_fech_f.empty:
         no_data()
     else:
-        df_plot, x_order = mes_fmt_ordered(df_new_plan_f)
+        df_plot = (
+            df_fech_f.groupby(["mes", "new_deal", "upsell"], as_index=False)
+            .agg(qtd=("mrr_fechado", "count"), mrr=("mrr_fechado", "sum"))
+        )
+        # Reagrupa por mes + tipo
+        df_new = (
+            df_fech_f[df_fech_f["new_deal"] == True]
+            .groupby("mes", as_index=False)
+            .agg(qtd=("mrr_fechado", "count"), mrr=("mrr_fechado", "sum"))
+        )
+        df_ups = (
+            df_fech_f[df_fech_f["upsell"] == True]
+            .groupby("mes", as_index=False)
+            .agg(qtd=("mrr_fechado", "count"), mrr=("mrr_fechado", "sum"))
+        )
+        # Base para eixo X ordenado
+        df_base = df_fech_f.groupby("mes", as_index=False)["mrr_fechado"].sum()
+        df_base, x_order = mes_fmt_ordered(df_base)
+
+        def _enrich(df_agg):
+            df_agg, _ = mes_fmt_ordered(df_agg)
+            return df_agg
+
+        df_new = _enrich(df_new)
+        df_ups = _enrich(df_ups)
+
         fig = go.Figure()
-        for plano in ["pro", "lite", "starter", "basic", "filha", "outros"]:
-            sub = df_plot[df_plot["plano"] == plano].sort_values("mes")
-            if sub.empty:
-                continue
-            fig.add_bar(
-                x=sub["mes_fmt"], y=sub["new_clients"],
-                name=PLAN_LABELS.get(plano, plano),
-                marker_color=PLAN_COLORS.get(plano, PALETTE[3]),
-                hovertemplate=f"<b>{PLAN_LABELS.get(plano, plano)}</b><br>%{{y}} clientes<extra></extra>",
-            )
-        # Linha com total por mês
-        total_por_mes = df_plot.groupby("mes_fmt", sort=False)["new_clients"].sum().reset_index()
-        total_por_mes = total_por_mes.set_index("mes_fmt").reindex(x_order).reset_index()
-        fig.add_scatter(
-            x=total_por_mes["mes_fmt"], y=total_por_mes["new_clients"],
-            name="Total", mode="lines+markers",
-            line=dict(color=PALETTE[1], width=2),
-            marker=dict(size=7),
-            hovertemplate="<b>Total</b> %{y} clientes<extra></extra>",
+        fig.add_bar(
+            x=df_new["mes_fmt"], y=df_new["mrr"],
+            name="New Logo",
+            marker_color=PALETTE[0],
+            customdata=df_new["qtd"],
+            hovertemplate="<b>New Logo</b><br>R$ %{y:,.0f} | %{customdata} fechamentos<extra></extra>",
+        )
+        fig.add_bar(
+            x=df_ups["mes_fmt"], y=df_ups["mrr"],
+            name="Upsell",
+            marker_color=PALETTE[3],
+            customdata=df_ups["qtd"],
+            hovertemplate="<b>Upsell</b><br>R$ %{y:,.0f} | %{customdata} fechamentos<extra></extra>",
         )
         fig.update_layout(
             barmode="stack",
@@ -174,30 +183,147 @@ with col_a:
         st.plotly_chart(chart_layout(fig, height=360, legend_bottom=True), use_container_width=True)
 
 with col_b:
-    # Participação por plano no último mês
-    if not df_new_plan_f.empty:
-        ultimo_mes = df_new_plan_f["mes"].max()
-        df_pie = df_new_plan_f[df_new_plan_f["mes"] == ultimo_mes].copy()
-        df_pie = df_pie[df_pie["new_clients"] > 0]
-        if not df_pie.empty:
+    # Pizza por canal no período selecionado
+    if not df_fech_f.empty:
+        df_canal = (
+            df_fech_f.groupby("channel", as_index=False)
+            .agg(mrr=("mrr_fechado", "sum"), qtd=("mrr_fechado", "count"))
+            .sort_values("mrr", ascending=False)
+        )
+        df_canal = df_canal[df_canal["mrr"] > 0]
+        if not df_canal.empty:
+            canal_colors = [PALETTE[i % len(PALETTE)] for i in range(len(df_canal))]
             fig = go.Figure(go.Pie(
-                labels=df_pie["plano"].map(PLAN_LABELS),
-                values=df_pie["new_clients"],
+                labels=df_canal["channel"].fillna("—"),
+                values=df_canal["mrr"],
                 hole=0.45,
-                marker_colors=[PLAN_COLORS.get(p, PALETTE[3]) for p in df_pie["plano"]],
-                textfont=dict(size=12, family="Outfit"),
+                marker_colors=canal_colors,
+                textfont=dict(size=11, family="Outfit"),
             ))
             fig.update_traces(
                 texttemplate="%{label}<br>%{percent}",
-                hovertemplate="<b>%{label}</b><br>%{value} clientes (%{percent})<extra></extra>",
+                hovertemplate="<b>%{label}</b><br>R$ %{value:,.0f} (%{percent})<extra></extra>",
             )
-            mes_label = ultimo_mes.strftime("%b/%y").capitalize()
             st.plotly_chart(chart_layout(fig, height=360), use_container_width=True)
-            st.caption(f"Distribuição por plano — {mes_label}")
+            st.caption("MRR fechado por canal no período")
+
+# ── Gráfico: MRR fechado por vendedor (barras horizontais) ───────────────────
+if not df_fech_f.empty:
+    with st.expander("📊 MRR Fechado por Vendedor"):
+        df_vend = (
+            df_fech_f.groupby("sales_owner", as_index=False)
+            .agg(mrr=("mrr_fechado", "sum"), qtd=("mrr_fechado", "count"))
+            .sort_values("mrr", ascending=True)
+        )
+        df_vend = df_vend[df_vend["mrr"] > 0].tail(20)
+        fig = go.Figure()
+        fig.add_bar(
+            x=df_vend["mrr"],
+            y=df_vend["sales_owner"].fillna("—"),
+            orientation="h",
+            marker_color=PALETTE[0],
+            customdata=df_vend["qtd"],
+            hovertemplate="<b>%{y}</b><br>R$ %{x:,.0f} | %{customdata} fechamentos<extra></extra>",
+            text=df_vend["mrr"].apply(lambda v: f"R$ {fmt_brl(v)}"),
+            textposition="outside",
+            textfont=dict(size=11, color="#a0a0a0"),
+        )
+        fig.update_layout(showlegend=False, yaxis=dict(type="category"))
+        st.plotly_chart(chart_layout(fig, height=max(300, len(df_vend) * 28)), use_container_width=True)
 
 st.divider()
 
-# ── Gráfico 2: CAC + Payback (dual axis) ─────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEÇÃO 2 — FECHADO vs MRR ATUAL
+# ═══════════════════════════════════════════════════════════════════════════════
+st.subheader("Fechado vs MRR Atual")
+
+if df_vs_f.empty:
+    no_data("Nenhum fechamento encontrado com os filtros selecionados.")
+else:
+    # KPIs resumo
+    total_fech_v   = df_vs_f["mrr_fechado"].sum()
+    total_atual_v  = df_vs_f["mrr_atual"].sum()
+    total_delta_v  = df_vs_f["delta"].sum()
+    pct_delta      = total_delta_v / total_fech_v * 100 if total_fech_v > 0 else 0
+
+    kv1, kv2, kv3, kv4 = st.columns(4)
+    with kv1:
+        st.metric("MRR Total Fechado", f"R$ {fmt_brl(total_fech_v)}")
+    with kv2:
+        st.metric("MRR Total Atual", f"R$ {fmt_brl(total_atual_v)}")
+    with kv3:
+        color = "normal" if total_delta_v >= 0 else "inverse"
+        st.metric("Delta Total", f"R$ {fmt_brl(total_delta_v, decimals=0)}",
+                  delta_color=color)
+    with kv4:
+        st.metric("Variação Média", f"{pct_delta:+.1f}%")
+
+    # Tabela comparativa
+    df_tab = df_vs_f[[
+        "company_name", "channel", "plan", "sales_owner",
+        "first_payment", "mrr_fechado", "mrr_atual", "delta", "variacao_pct",
+    ]].copy()
+    df_tab = df_tab.sort_values("delta")
+    df_tab = df_tab.rename(columns={
+        "company_name":  "Cliente",
+        "channel":       "Canal",
+        "plan":          "Plano",
+        "sales_owner":   "Vendedor",
+        "first_payment": "Data Fechamento",
+        "mrr_fechado":   "MRR Fechado",
+        "mrr_atual":     "MRR Atual",
+        "delta":         "Delta",
+        "variacao_pct":  "Var%",
+    })
+    df_tab["Data Fechamento"] = df_tab["Data Fechamento"].dt.strftime("%d/%m/%Y")
+
+    currency_cols = ["MRR Fechado", "MRR Atual", "Delta"]
+    st.dataframe(
+        df_tab,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            **{c: st.column_config.NumberColumn(format="R$ %,.0f") for c in currency_cols},
+            "Var%": st.column_config.NumberColumn(format="%.1f%%"),
+        },
+    )
+
+    # Gráfico: distribuição de delta (histograma)
+    with st.expander("📊 Distribuição do Delta (Fechado → Atual)"):
+        df_hist = df_vs_f[df_vs_f["variacao_pct"].notna()].copy()
+        if not df_hist.empty:
+            bins = [-float("inf"), -50, -20, -5, 5, 20, 50, float("inf")]
+            labels = ["< -50%", "-50 a -20%", "-20 a -5%", "±5%", "+5 a +20%", "+20 a +50%", "> +50%"]
+            df_hist["faixa_delta"] = pd.cut(df_hist["variacao_pct"], bins=bins, labels=labels)
+            dist = df_hist.groupby("faixa_delta", observed=True).agg(
+                qtd=("variacao_pct", "count"),
+                mrr_delta=("delta", "sum"),
+            ).reset_index()
+            bar_colors = [
+                PALETTE[9] if "−" in str(l) or l.startswith("<") or l.startswith("-")
+                else (PALETTE[3] if l == "±5%" else PALETTE[0])
+                for l in dist["faixa_delta"].astype(str)
+            ]
+            fig = go.Figure()
+            fig.add_bar(
+                x=dist["faixa_delta"].astype(str),
+                y=dist["qtd"],
+                marker_color=bar_colors,
+                customdata=dist["mrr_delta"],
+                hovertemplate="<b>%{x}</b><br>%{y} clientes<br>Delta total: R$ %{customdata:,.0f}<extra></extra>",
+                text=dist["qtd"],
+                textposition="outside",
+                textfont=dict(size=11, color="#a0a0a0"),
+            )
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(chart_layout(fig, height=300), use_container_width=True)
+
+st.divider()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SEÇÃO 3 — CAC & PAYBACK
+# ═══════════════════════════════════════════════════════════════════════════════
 st.subheader("CAC & Payback por Mês")
 
 if df_cac_f.empty:
@@ -233,46 +359,7 @@ else:
 
 st.divider()
 
-# ── Gráfico 3: Breakdown de custos de aquisição ───────────────────────────────
-st.subheader("Composição dos Custos de Aquisição")
-
-GRUPO_LABELS = {
-    "comercial":        "Comercial",
-    "marketing":        "Marketing",
-    "eventos_parceiros": "Eventos & Parceiros",
-    "outbound":         "Outbound",
-}
-GRUPO_COLORS = {
-    "comercial":        "#6eda2c",
-    "marketing":        "#ffffff",
-    "eventos_parceiros": "#a0a0a0",
-    "outbound":         "#4c4c4c",
-}
-
-if df_desp_f.empty:
-    no_data("Nenhuma despesa encontrada para os centros de custo de aquisição.")
-else:
-    df_plot, x_order = mes_fmt_ordered(df_desp_f)
-    fig = go.Figure()
-    for grupo in ["comercial", "marketing", "eventos_parceiros", "outbound"]:
-        sub = df_plot[df_plot["grupo"] == grupo].sort_values("mes")
-        if sub.empty:
-            continue
-        fig.add_bar(
-            x=sub["mes_fmt"], y=sub["valor"],
-            name=GRUPO_LABELS.get(grupo, grupo),
-            marker_color=GRUPO_COLORS.get(grupo, PALETTE[3]),
-            hovertemplate=f"<b>{GRUPO_LABELS.get(grupo, grupo)}</b><br>R$ %{{y:,.0f}}<extra></extra>",
-        )
-    fig.update_layout(
-        barmode="stack",
-        xaxis=dict(categoryorder="array", categoryarray=x_order, type="category"),
-    )
-    st.plotly_chart(chart_layout(fig, height=360, legend_bottom=True), use_container_width=True)
-
-st.divider()
-
-# ── Gráfico 4: LTV:CAC ratio ─────────────────────────────────────────────────
+# ── LTV:CAC ───────────────────────────────────────────────────────────────────
 st.subheader("LTV : CAC")
 
 col_ltv, col_tab = st.columns([3, 2])
@@ -293,7 +380,6 @@ with col_ltv:
             textfont=dict(size=11, color="#a0a0a0"),
             hovertemplate="<b>LTV:CAC</b> %{y:.1f}x<extra></extra>",
         )
-        # Linha de referência 3x
         fig.add_hline(y=3, line_dash="dot", line_color=PALETTE[6],
                       annotation_text="Meta 3x", annotation_position="right")
         fig.update_layout(
@@ -307,12 +393,12 @@ with col_tab:
         ultimo = df_cac_f.sort_values("mes").iloc[-1]
         st.markdown("#### Último mês")
         metricas = {
-            "ARPU": f"R$ {fmt_brl(ultimo.get('arpu', 0))}",
-            "Churn Rate": f"{ultimo.get('churn_rate', 0)*100:.1f}%",
+            "ARPU":         f"R$ {fmt_brl(ultimo.get('arpu', 0))}",
+            "Churn Rate":   f"{ultimo.get('churn_rate', 0)*100:.1f}%",
             "LTV estimado": f"R$ {fmt_brl(ultimo.get('ltv', 0))}",
-            "CAC": f"R$ {fmt_brl(ultimo.get('cac', 0))}",
-            "LTV:CAC": f"{ultimo.get('ltv_cac', 0):.1f}x",
-            "Payback": f"{ultimo.get('payback_meses', 0):.1f} meses",
+            "CAC":          f"R$ {fmt_brl(ultimo.get('cac', 0))}",
+            "LTV:CAC":      f"{ultimo.get('ltv_cac', 0):.1f}x",
+            "Payback":      f"{ultimo.get('payback_meses', 0):.1f} meses",
         }
         for label, valor in metricas.items():
             cols = st.columns([2, 2])

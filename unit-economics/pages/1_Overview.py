@@ -6,7 +6,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 
-st.set_page_config(page_title="Overview | Unit Economics", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Overview | Unit Economics", layout="wide")
 
 if "auth" in st.secrets and not st.user.is_logged_in:
     st.error("⛔ Acesso não autorizado.")
@@ -75,14 +75,8 @@ with st.spinner("Carregando dados..."):
     df_wf  = load_mrr_waterfall()
     df_plan = load_mrr_por_plano()
 
-_last_closed_month = (pd.Timestamp.now().to_period("M") - 1).to_timestamp()
-
 df_wf_f   = filter_months(df_wf, n_months)
 df_plan_f = filter_months(df_plan, n_months)
-
-# Remove mês atual (incompleto) — exibe apenas até o mês anterior fechado
-df_wf_f   = df_wf_f[df_wf_f["mes"] <= _last_closed_month]
-df_plan_f = df_plan_f[df_plan_f["mes"] <= _last_closed_month]
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
 st.subheader("Resumo do Período")

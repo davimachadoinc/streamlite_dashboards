@@ -106,6 +106,20 @@ _PLAN_CASE = """
     END
 """
 
+_FAIXA_CASE = """
+    CASE
+      WHEN {col} LIKE '%1 - 100%'    OR {col} LIKE '%1 a 100%'       THEN '1-100'
+      WHEN {col} LIKE '%101 - 300%'                                    THEN '101-300'
+      WHEN {col} LIKE '%301 - 600%'                                    THEN '301-600'
+      WHEN {col} LIKE '%601 - 1000%'                                   THEN '601-1000'
+      WHEN {col} LIKE '%1001 - 2500%'                                  THEN '1001-2500'
+      WHEN {col} LIKE '%2501 - 5000%' OR {col} LIKE '%2501 - 7500%'   THEN '2501-5000'
+      WHEN {col} LIKE '%5001 - 10000%' OR {col} LIKE '%7501 - 12500%' THEN '5001-10000'
+      WHEN {col} LIKE '%10001+%'      OR {col} LIKE '%12501 - 20000%' THEN '10001+'
+      ELSE 'sem_faixa'
+    END
+"""
+
 
 # ─────────────────────────────────────────────
 # HELPERS VISUAIS
@@ -326,7 +340,60 @@ def load_mrr_waterfall() -> pd.DataFrame:
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
       GROUP BY 1
     ),
-    -- MRR ativo no início de cada mês (snapshot: contratos que já iniciaram mas não terminaram)
+    -- ── Renovações: pares (contrato antigo encerrando no último dia do mês X,
+    --    mesmo cliente+produto reinicia no mês X+1). Usados para manter
+    --    continuidade do mrr_inicio e capturar apenas o delta no expansion. ──────
+    ren_old_agg AS (
+      SELECT
+        st_sincro_sac,
+        st_descricao_prd,
+        DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH)  AS mes_old,
+        SUM(valor_total)                               AS old_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NOT NULL
+        AND CAST(dt_fim_mens AS DATE) = LAST_DAY(CAST(dt_fim_mens AS DATE))
+        AND st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH)
+              >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 18 MONTH)
+      GROUP BY 1, 2, 3
+    ),
+    ren_new_agg AS (
+      SELECT
+        st_sincro_sac,
+        st_descricao_prd,
+        DATE_TRUNC(CAST(dt_inicio_mens AS DATE), MONTH) AS mes_new,
+        SUM(valor_total)                                 AS new_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND DATE_TRUNC(CAST(dt_inicio_mens AS DATE), MONTH)
+              >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
+      GROUP BY 1, 2, 3
+    ),
+    -- Marcador de linhas do MRR que fazem parte de uma renovação (cliente+produto)
+    ren_markers AS (
+      SELECT DISTINCT o.st_sincro_sac, o.st_descricao_prd, o.mes_old
+      FROM ren_old_agg o
+      INNER JOIN ren_new_agg n
+        ON  o.st_sincro_sac    = n.st_sincro_sac
+        AND o.st_descricao_prd = n.st_descricao_prd
+        AND n.mes_new = DATE_ADD(o.mes_old, INTERVAL 1 MONTH)
+    ),
+    -- Delta líquido de valor por mês para renovações (novo_total - antigo_total)
+    renovacoes_delta_mes AS (
+      SELECT
+        DATE_ADD(o.mes_old, INTERVAL 1 MONTH) AS mes,
+        SUM(n.new_total - o.old_total)         AS ren_delta
+      FROM ren_old_agg o
+      INNER JOIN ren_new_agg n
+        ON  o.st_sincro_sac    = n.st_sincro_sac
+        AND o.st_descricao_prd = n.st_descricao_prd
+        AND n.mes_new = DATE_ADD(o.mes_old, INTERVAL 1 MONTH)
+      GROUP BY 1
+    ),
+    -- MRR ativo no início de cada mês. Inclui contratos de renovação que encerraram
+    -- no último dia do mês anterior (para manter continuidade do waterfall).
     mrr_inicio_mes AS (
       SELECT
         cal.mes,
@@ -334,8 +401,18 @@ def load_mrr_waterfall() -> pd.DataFrame:
         COUNT(DISTINCT mrr.st_sincro_sac) AS clientes_inicio
       FROM meses cal
       CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
+      LEFT JOIN ren_markers rm
+        ON  mrr.st_sincro_sac    = rm.st_sincro_sac
+        AND mrr.st_descricao_prd = rm.st_descricao_prd
+        AND DATE_TRUNC(CAST(mrr.dt_fim_mens AS DATE), MONTH) = rm.mes_old
       WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
-        AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) >= cal.mes)
+        AND (
+          mrr.dt_fim_mens IS NULL
+          OR CAST(mrr.dt_fim_mens AS DATE) >= cal.mes
+          -- Renovação: mantém contrato antigo no mrr_inicio do mês seguinte
+          OR (rm.st_sincro_sac IS NOT NULL
+              AND CAST(mrr.dt_fim_mens AS DATE) = DATE_SUB(cal.mes, INTERVAL 1 DAY))
+        )
         AND mrr.st_descricao_prd NOT LIKE '%Setup%'
         AND mrr.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
       GROUP BY 1
@@ -381,15 +458,23 @@ def load_mrr_waterfall() -> pd.DataFrame:
         AND DATE_TRUNC(CAST(prev.dt_fim_mens AS DATE), MONTH) = DATE_SUB(e.mes, INTERVAL 1 MONTH)
     ),
     expansion_mes AS (
+      -- Expansão regular (sem renovações) + delta líquido de renovações
       SELECT
-        e.mes,
-        SUM(e.valor_total)                AS expansion_mrr,
-        COUNT(DISTINCT e.st_sincro_sac)   AS expanded_clients
-      FROM expansao_raw e
-      LEFT JOIN renovacoes_exp r
-        ON e.st_sincro_sac = r.st_sincro_sac AND e.st_descricao_prd = r.st_descricao_prd AND e.mes = r.mes
-      WHERE r.st_sincro_sac IS NULL
-      GROUP BY 1
+        COALESCE(reg.mes, ren.mes)                                    AS mes,
+        COALESCE(reg.expansion_mrr, 0) + COALESCE(ren.ren_delta, 0)  AS expansion_mrr,
+        COALESCE(reg.expanded_clients, 0)                             AS expanded_clients
+      FROM (
+        SELECT
+          e.mes,
+          SUM(e.valor_total)              AS expansion_mrr,
+          COUNT(DISTINCT e.st_sincro_sac) AS expanded_clients
+        FROM expansao_raw e
+        LEFT JOIN renovacoes_exp r
+          ON e.st_sincro_sac = r.st_sincro_sac AND e.st_descricao_prd = r.st_descricao_prd AND e.mes = r.mes
+        WHERE r.st_sincro_sac IS NULL
+        GROUP BY 1
+      ) reg
+      FULL OUTER JOIN renovacoes_delta_mes ren ON reg.mes = ren.mes
     ),
     -- Churn (com exclusão de renovações — mesmo padrão do dashboard de desativações)
     desativados_raw AS (
@@ -1020,6 +1105,232 @@ def load_despesas_cac() -> pd.DataFrame:
     df["mes"] = df["liquidacao"].dt.to_period("M").dt.to_timestamp()
     df = df.groupby(["mes", "grupo"], as_index=False)["valor"].sum()
     df["mes"] = pd.to_datetime(df["mes"])
+    return df
+
+
+# ─────────────────────────────────────────────
+# QUERY — FECHAMENTOS DE VENDAS
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def load_fechamentos_vendas() -> pd.DataFrame:
+    """
+    Retorna fechamentos da tabela Fechamentos_com_ajustes (últimos 18 meses).
+    Campos: mes, first_payment, company_name, superlogica_id, tertiarygroup_id,
+            sdr_owner, sales_owner, channel, plan, products, member_range,
+            mrr_fechado, setup, FYV, upsell, new_deal.
+    """
+    query = """
+    SELECT
+      DATE_TRUNC(first_payment, MONTH)   AS mes,
+      first_payment,
+      company_name,
+      superlogica_id,
+      tertiarygroup_id,
+      sdr_owner,
+      sales_owner,
+      channel,
+      plan,
+      products,
+      member_range,
+      value                              AS mrr_fechado,
+      setup,
+      FYV,
+      upsell,
+      new_deal
+    FROM `business-intelligence-467516.Fechamento_vendas.Fechamentos_com_ajustes`
+    WHERE first_payment IS NOT NULL
+      AND first_payment >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
+    ORDER BY first_payment DESC
+    """
+    df = _query_bi(query)
+    if not df.empty:
+        df["mes"]           = pd.to_datetime(df["mes"])
+        df["first_payment"] = pd.to_datetime(df["first_payment"])
+        for col in ("mrr_fechado", "setup", "FYV"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    return df
+
+
+# ─────────────────────────────────────────────
+# QUERY — FECHADO VS MRR ATUAL
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def load_fechamentos_vs_mrr_atual() -> pd.DataFrame:
+    """
+    Junta cada fechamento com o MRR ativo atual do cliente no Superlógica.
+    Join: Fechamentos_com_ajustes.tertiarygroup_id = vw-splgc-tabela_mrr_validos.st_sincro_sac
+    Retorna: company_name, channel, plan, sales_owner, first_payment,
+             mrr_fechado, mrr_atual, delta, variacao_pct.
+    """
+    query = """
+    WITH mrr_atual AS (
+      SELECT
+        st_sincro_sac,
+        SUM(valor_total) AS mrr_atual
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NULL
+        AND st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+      GROUP BY 1
+    )
+    SELECT
+      f.first_payment,
+      DATE_TRUNC(f.first_payment, MONTH)        AS mes,
+      f.company_name,
+      f.superlogica_id,
+      f.tertiarygroup_id,
+      f.channel,
+      f.plan,
+      f.sales_owner,
+      f.sdr_owner,
+      f.member_range,
+      f.value                                   AS mrr_fechado,
+      COALESCE(m.mrr_atual, 0)                  AS mrr_atual,
+      COALESCE(m.mrr_atual, 0) - f.value        AS delta,
+      CASE
+        WHEN f.value > 0
+          THEN ROUND((COALESCE(m.mrr_atual, 0) - f.value) / f.value * 100, 1)
+        ELSE NULL
+      END                                       AS variacao_pct,
+      f.upsell,
+      f.new_deal
+    FROM `business-intelligence-467516.Fechamento_vendas.Fechamentos_com_ajustes` f
+    LEFT JOIN mrr_atual m ON f.tertiarygroup_id = m.st_sincro_sac
+    WHERE f.first_payment IS NOT NULL
+    ORDER BY f.first_payment DESC
+    """
+    df = _query_bi(query)
+    if not df.empty:
+        df["mes"]           = pd.to_datetime(df["mes"])
+        df["first_payment"] = pd.to_datetime(df["first_payment"])
+        for col in ("mrr_fechado", "mrr_atual", "delta", "variacao_pct"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+# ─────────────────────────────────────────────
+# QUERY — UPGRADE DE PLANO DETALHADO
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def load_upgrade_detalhado() -> pd.DataFrame:
+    """
+    Para cada evento de expansion de plano base (não módulo), identifica
+    qual plano existia antes e classifica o tipo de upgrade:
+      'mudanca_plano'  — ex: Lite → Pro
+      'mudanca_faixa'  — ex: Lite 1-100 → Lite 101-300
+      'outro'          — novo plano sem anterior identificado
+    Últimos 18 meses.
+    """
+    excl = _EXCL_MODULOS.format(col="m.st_descricao_prd")
+    excl_prev = _EXCL_MODULOS.format(col="prev.st_descricao_prd")
+    plan_novo  = _PLAN_CASE.format(col="u.prd_novo")
+    plan_ant   = _PLAN_CASE.format(col="u.prd_antigo")
+    faixa_novo = _FAIXA_CASE.format(col="u.prd_novo")
+    faixa_ant  = _FAIXA_CASE.format(col="u.prd_antigo")
+
+    query = f"""
+    WITH
+    primeiro_inicio AS (
+      SELECT st_sincro_sac, MIN(CAST(dt_inicio_mens AS DATE)) AS dt_first
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+      GROUP BY 1
+    ),
+    expansao_raw AS (
+      SELECT
+        m.st_sincro_sac,
+        m.st_descricao_prd,
+        CAST(m.dt_inicio_mens AS DATE)                          AS dt_inicio,
+        DATE_TRUNC(CAST(m.dt_inicio_mens AS DATE), MONTH)       AS mes,
+        m.valor_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
+      JOIN primeiro_inicio p ON m.st_sincro_sac = p.st_sincro_sac
+      WHERE CAST(m.dt_inicio_mens AS DATE) > p.dt_first
+        AND m.st_descricao_prd NOT LIKE '%Setup%'
+        AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND {excl}
+        AND CAST(m.dt_inicio_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
+    ),
+    renovacoes_exp AS (
+      SELECT DISTINCT e.st_sincro_sac, e.st_descricao_prd, e.mes
+      FROM expansao_raw e
+      INNER JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` prev
+        ON e.st_sincro_sac     = prev.st_sincro_sac
+        AND e.st_descricao_prd  = prev.st_descricao_prd
+        AND CAST(prev.dt_fim_mens AS DATE) = LAST_DAY(CAST(prev.dt_fim_mens AS DATE))
+        AND DATE_TRUNC(CAST(prev.dt_fim_mens AS DATE), MONTH) = DATE_SUB(e.mes, INTERVAL 1 MONTH)
+    ),
+    upgrades AS (
+      SELECT
+        e.st_sincro_sac,
+        e.st_descricao_prd  AS prd_novo,
+        e.dt_inicio,
+        e.mes,
+        e.valor_total       AS mrr_novo
+      FROM expansao_raw e
+      LEFT JOIN renovacoes_exp r
+        ON e.st_sincro_sac    = r.st_sincro_sac
+        AND e.st_descricao_prd = r.st_descricao_prd
+        AND e.mes              = r.mes
+      WHERE r.st_sincro_sac IS NULL
+    ),
+    com_anterior AS (
+      SELECT
+        u.mes,
+        u.st_sincro_sac,
+        u.prd_novo,
+        u.mrr_novo,
+        prev.st_descricao_prd    AS prd_antigo,
+        prev.valor_total         AS mrr_antigo,
+        ROW_NUMBER() OVER (
+          PARTITION BY u.st_sincro_sac, u.dt_inicio
+          ORDER BY CAST(prev.dt_fim_mens AS DATE) DESC
+        ) AS rn
+      FROM upgrades u
+      LEFT JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` prev
+        ON  u.st_sincro_sac = prev.st_sincro_sac
+        AND prev.st_descricao_prd NOT LIKE '%Setup%'
+        AND prev.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND {excl_prev}
+        AND CAST(prev.dt_fim_mens AS DATE)
+              BETWEEN DATE_SUB(u.dt_inicio, INTERVAL 60 DAY) AND u.dt_inicio
+    )
+    SELECT
+      mes,
+      st_sincro_sac                                      AS cliente_id,
+      prd_novo,
+      COALESCE(prd_antigo, '—')                          AS prd_antigo,
+      mrr_novo,
+      COALESCE(mrr_antigo, 0)                            AS mrr_antigo,
+      mrr_novo - COALESCE(mrr_antigo, 0)                 AS delta_mrr,
+      {plan_novo}                                        AS plano_novo,
+      COALESCE(
+        NULLIF({plan_ant}, 'outros'),
+        'sem_anterior'
+      )                                                  AS plano_antigo,
+      {faixa_novo}                                       AS faixa_nova,
+      COALESCE(
+        NULLIF({faixa_ant}, 'sem_faixa'),
+        'sem_anterior'
+      )                                                  AS faixa_antiga,
+      CASE
+        WHEN prd_antigo IS NULL                           THEN 'novo_sem_anterior'
+        WHEN {plan_novo} != {plan_ant}                    THEN 'mudanca_plano'
+        WHEN {faixa_novo} != {faixa_ant}                  THEN 'mudanca_faixa'
+        ELSE 'outro'
+      END                                                AS tipo_upgrade
+    FROM com_anterior
+    WHERE rn = 1
+    ORDER BY mes DESC, delta_mrr DESC
+    """
+    df = _query_bi(query)
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+        for col in ("mrr_novo", "mrr_antigo", "delta_mrr"):
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     return df
 
 

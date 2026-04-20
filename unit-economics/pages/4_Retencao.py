@@ -6,7 +6,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 
-st.set_page_config(page_title="Retenção | Unit Economics", page_icon="🔄", layout="wide")
+st.set_page_config(page_title="Retenção | Unit Economics", layout="wide")
 
 if "auth" in st.secrets and not st.user.is_logged_in:
     st.error("⛔ Acesso não autorizado.")
