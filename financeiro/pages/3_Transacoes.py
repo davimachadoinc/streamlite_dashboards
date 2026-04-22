@@ -405,10 +405,26 @@ st.divider()
 
 # ── Tabela detalhada ──────────────────────────
 with st.expander("📋 Tabela Detalhada por Mês e Método"):
-    df_table = (
+    st.markdown("**Volume (R$) por método**")
+    df_table_val = (
         df_agg
         .pivot_table(index="mes_fmt", columns="payment_method",
                      values="total_value", aggfunc="sum")
-        .round(2).reset_index().rename(columns={"mes_fmt": "Mês"})
+        .round(2)
+        .reindex(x_order)
+        .reset_index()
+        .rename(columns={"mes_fmt": "Mês"})
     )
-    st.dataframe(df_table, use_container_width=True, hide_index=True)
+    st.dataframe(df_table_val, use_container_width=True, hide_index=True)
+
+    st.markdown("**Quantidade de transações por método**")
+    df_table_qtd = (
+        df_agg
+        .pivot_table(index="mes_fmt", columns="payment_method",
+                     values="qtd", aggfunc="sum")
+        .astype("Int64")
+        .reindex(x_order)
+        .reset_index()
+        .rename(columns={"mes_fmt": "Mês"})
+    )
+    st.dataframe(df_table_qtd, use_container_width=True, hide_index=True)
