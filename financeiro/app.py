@@ -69,4 +69,4 @@ with st.sidebar:
     if st.button("🚪 Sair", use_container_width=True):
         st.logout()
 
-st.switch_page("pages/1_📊_Cobranca.py")
+st.switch_page("pages/1_Cobranca.py")
