@@ -67,4 +67,4 @@ if _auth_on:
         if st.button("🚪 Sair", use_container_width=True):
             st.logout()
 
-st.switch_page("pages/1_📊_Overview.py")
+st.switch_page("pages/1_Overview.py")
