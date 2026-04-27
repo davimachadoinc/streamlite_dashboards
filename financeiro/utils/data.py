@@ -929,11 +929,17 @@ def load_inadimplencia_serie() -> pd.DataFrame:
     LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
       ON b.id_sacado_sac = c.id_sacado_sac
     WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
-            AND CAST(b.dt_vencimento_recb AS DATE)
+      AND CAST(b.dt_vencimento_recb AS DATE)
             >= DATE_SUB(CURRENT_DATE(), INTERVAL 18 MONTH)
       AND CAST(b.dt_vencimento_recb AS DATE) < CURRENT_DATE()
       AND (c.dt_desativacao_sac IS NULL
            OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
+      AND EXISTS (
+        SELECT 1
+        FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` pago
+        WHERE pago.id_sacado_sac = b.id_sacado_sac
+          AND pago.dt_liquidacao_recb IS NOT NULL
+      )
     """
     df_b = _bq_query(query, "bigquery_bi")
     if df_b.empty:
@@ -1011,18 +1017,16 @@ def load_inadimplencia_por_plano() -> pd.DataFrame:
     LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
       ON b.id_sacado_sac = c.id_sacado_sac
     WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
-      AND b.fl_status_recb = '0'
-      AND b.comp_valor > 1
+      AND b.dt_liquidacao_recb IS NULL
       AND CAST(b.dt_vencimento_recb AS DATE)
             BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
       AND (c.dt_desativacao_sac IS NULL
            OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
-      AND {_EXCL_MODULOS.format(col="b.comp_st_descricao_prd")}
       AND EXISTS (
         SELECT 1
         FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` pago
         WHERE pago.id_sacado_sac = b.id_sacado_sac
-          AND pago.fl_status_recb = '1'
+          AND pago.dt_liquidacao_recb IS NOT NULL
       )
     GROUP BY 1
     ORDER BY valor_aberto DESC
@@ -1049,11 +1053,17 @@ def load_inadimplencia_por_frequencia() -> pd.DataFrame:
       LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
         ON b.id_sacado_sac = c.id_sacado_sac
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
-        AND b.fl_status_recb = '0'
+        AND b.dt_liquidacao_recb IS NULL
         AND CAST(b.dt_vencimento_recb AS DATE)
               BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
+        AND EXISTS (
+          SELECT 1
+          FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` pago
+          WHERE pago.id_sacado_sac = b.id_sacado_sac
+            AND pago.dt_liquidacao_recb IS NOT NULL
+        )
       GROUP BY 1
     )
     SELECT
@@ -1093,18 +1103,16 @@ def load_inadimplencia_top_clientes(dias: int = 30) -> pd.DataFrame:
       LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
         ON b.id_sacado_sac = c.id_sacado_sac
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
-        AND b.fl_status_recb = '0'
-        AND b.comp_valor > 1
+        AND b.dt_liquidacao_recb IS NULL
         AND CAST(b.dt_vencimento_recb AS DATE)
               BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL {dias} DAY) AND CURRENT_DATE()
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
-        AND {_EXCL_MODULOS.format(col="b.comp_st_descricao_prd")}
         AND EXISTS (
           SELECT 1
           FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` pago
           WHERE pago.id_sacado_sac = b.id_sacado_sac
-            AND pago.fl_status_recb = '1'
+            AND pago.dt_liquidacao_recb IS NOT NULL
         )
       GROUP BY 1
     )
