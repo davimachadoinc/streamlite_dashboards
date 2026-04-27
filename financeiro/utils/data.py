@@ -1005,7 +1005,7 @@ def load_inadimplencia_por_plano() -> pd.DataFrame:
     query = f"""
     SELECT
       {_PLAN_CASE.format(col="b.comp_st_descricao_prd")}              AS plano,
-      COUNT(DISTINCT b.st_sincro_sac)                                  AS clientes_inadimplentes,
+      COUNT(DISTINCT b.id_sacado_sac)                                  AS clientes_inadimplentes,
       SUM(b.comp_valor)                                                AS valor_aberto
     FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
     LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
@@ -1013,7 +1013,7 @@ def load_inadimplencia_por_plano() -> pd.DataFrame:
     WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
       AND b.fl_status_recb = '0'
       AND b.comp_valor > 1
-            AND CAST(b.dt_vencimento_recb AS DATE)
+      AND CAST(b.dt_vencimento_recb AS DATE)
             BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
       AND (c.dt_desativacao_sac IS NULL
            OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
@@ -1021,7 +1021,7 @@ def load_inadimplencia_por_plano() -> pd.DataFrame:
       AND EXISTS (
         SELECT 1
         FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` pago
-        WHERE pago.st_sincro_sac = b.st_sincro_sac
+        WHERE pago.id_sacado_sac = b.id_sacado_sac
           AND pago.fl_status_recb = '1'
       )
     GROUP BY 1
@@ -1042,7 +1042,7 @@ def load_inadimplencia_por_frequencia() -> pd.DataFrame:
     query = """
     WITH inadimplentes AS (
       SELECT
-        b.st_sincro_sac,
+        b.id_sacado_sac,
         COUNT(DISTINCT b.id_recebimento_recb) AS boletos_abertos,
         SUM(b.comp_valor)                      AS valor_aberto
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
@@ -1050,7 +1050,7 @@ def load_inadimplencia_por_frequencia() -> pd.DataFrame:
         ON b.id_sacado_sac = c.id_sacado_sac
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
         AND b.fl_status_recb = '0'
-                AND CAST(b.dt_vencimento_recb AS DATE)
+        AND CAST(b.dt_vencimento_recb AS DATE)
               BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
@@ -1084,7 +1084,7 @@ def load_inadimplencia_top_clientes(dias: int = 30) -> pd.DataFrame:
     query = f"""
     WITH inad AS (
       SELECT
-        b.st_sincro_sac,
+        b.id_sacado_sac,
         COUNT(DISTINCT b.id_recebimento_recb)                          AS boletos_abertos,
         SUM(b.comp_valor)                                              AS valor_aberto,
         MAX(DATE_DIFF(CURRENT_DATE(), CAST(b.dt_vencimento_recb AS DATE), DAY)) AS max_dias_atraso,
@@ -1095,7 +1095,7 @@ def load_inadimplencia_top_clientes(dias: int = 30) -> pd.DataFrame:
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
         AND b.fl_status_recb = '0'
         AND b.comp_valor > 1
-                AND CAST(b.dt_vencimento_recb AS DATE)
+        AND CAST(b.dt_vencimento_recb AS DATE)
               BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL {dias} DAY) AND CURRENT_DATE()
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
@@ -1103,13 +1103,13 @@ def load_inadimplencia_top_clientes(dias: int = 30) -> pd.DataFrame:
         AND EXISTS (
           SELECT 1
           FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` pago
-          WHERE pago.st_sincro_sac = b.st_sincro_sac
+          WHERE pago.id_sacado_sac = b.id_sacado_sac
             AND pago.fl_status_recb = '1'
         )
       GROUP BY 1
     )
     SELECT
-      i.st_sincro_sac                  AS id_cliente,
+      i.id_sacado_sac                  AS id_cliente,
       c.st_nome_sac                    AS nome_cliente,
       i.plano,
       ROUND(i.valor_aberto, 2)         AS valor_aberto,
@@ -1117,7 +1117,7 @@ def load_inadimplencia_top_clientes(dias: int = 30) -> pd.DataFrame:
       i.max_dias_atraso
     FROM inad i
     LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
-      ON i.st_sincro_sac = c.st_sincro_sac
+      ON i.id_sacado_sac = c.id_sacado_sac
     ORDER BY i.valor_aberto DESC
     LIMIT 30
     """
