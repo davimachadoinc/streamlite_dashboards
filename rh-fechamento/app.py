@@ -92,7 +92,7 @@ with st.sidebar:
 # ── Google Sheets helper ──────────────────────
 @st.cache_resource(show_spinner=False)
 def get_gspread_client():
-    creds_dict = dict(st.secrets["gsheets"])
+    creds_dict = dict(st.secrets["gcp_service_account"])
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     return gspread.authorize(creds)
 
