@@ -4,7 +4,7 @@ Atualiza status nas abas Contratação / Demissão / Alteração da planilha de 
 """
 import streamlit as st
 import gspread
-import requests
+import pandas as pd
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
@@ -14,7 +14,7 @@ from utils.style import inject_css
 st.set_page_config(
     page_title="RH · Fechamento",
     page_icon="📋",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="collapsed",
 )
 inject_css()
@@ -23,15 +23,6 @@ inject_css()
 SHEET_ID = "1j8UdznWVfZlAzzA_0uTRoCs2dPkCjBcTTqxkXamg8SM"
 ABAS = ["Contratação", "Demissão", "Alteração"]
 STATUS_OPTIONS = ["Finalizado", "Aguardando", "Cancelado"]
-
-STATUS_COLORS = {
-    "Finalizado": "#6eda2c",
-    "Aguardando":  "#f0a500",
-    "Cancelado":  "#e05252",
-}
-
-CHAT_URL = "https://backoffice-dot-operations-407517.rj.r.appspot.com/api/v1/chats/space/"
-CHAT_SPACE = "AAQAsKAHS2Q"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -98,7 +89,6 @@ def get_gspread_client():
 
 
 def load_aba(aba: str) -> tuple[list[dict], list]:
-    """Retorna (rows_as_dicts, all_values) para a aba especificada."""
     gc = get_gspread_client()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(aba)
@@ -111,7 +101,6 @@ def load_aba(aba: str) -> tuple[list[dict], list]:
 
 
 def update_status(aba: str, row_index_1based: int, new_status: str) -> None:
-    """Atualiza colunas status e dataAtualizacaoStatus na linha especificada (1-based, contando header)."""
     gc = get_gspread_client()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(aba)
@@ -127,21 +116,6 @@ def update_status(aba: str, row_index_1based: int, new_status: str) -> None:
     today = datetime.today().strftime("%d/%m/%Y %H:%M")
     ws.update_cell(row_index_1based, col_status, new_status)
     ws.update_cell(row_index_1based, col_data, today)
-
-
-def send_chat_notification(aba: str, label: str, status: str) -> None:
-    tipo = {"Contratação": "vaga", "Demissão": "solicitação de demissão", "Alteração": "solicitação de alteração"}.get(aba, "solicitação")
-    msg = f"A {tipo} {label} mudou o status para *{status}*"
-    try:
-        resp = requests.post(
-            f"{CHAT_URL}{CHAT_SPACE}/",
-            json={"text": msg},
-            timeout=8,
-        )
-        if not resp.ok:
-            st.warning(f"Chat: {resp.status_code} — {resp.text[:200]}")
-    except Exception as e:
-        st.warning(f"Chat erro: {e}")
 
 
 # ── Estado de sessão ──────────────────────────
@@ -180,16 +154,29 @@ aba = st.session_state.aba_selecionada
 st.divider()
 
 # ────────────────────────────────────────────
-# PASSO 2 — Selecionar linha
+# PASSO 2 — Tabela + seleção da linha
 # ────────────────────────────────────────────
-st.markdown(f"### 2. Qual solicitação em **{aba}**?")
-
 with st.spinner("Carregando planilha..."):
     rows, all_values = load_aba(aba)
 
+headers = all_values[0] if all_values else []
+
+def col_val(row: dict, col_letter: str) -> str:
+    idx = ord(col_letter.upper()) - ord("A")
+    if idx < len(headers):
+        return row.get(headers[idx], "").strip()
+    return ""
+
+def build_label(row: dict) -> str:
+    cargo = col_val(row, "E")
+    ts    = col_val(row, "A")
+    area  = col_val(row, "H")
+    parts = [p for p in [cargo, ts, area] if p]
+    return " — ".join(parts) if parts else "(sem identificação)"
+
 # Filtrar apenas "Em andamento"
 abertas = [
-    (i + 2, r)  # i+2 = linha real na planilha (1-based + header)
+    (i + 2, r)
     for i, r in enumerate(rows)
     if r.get("status", "").strip() == "Em andamento"
 ]
@@ -198,32 +185,39 @@ if not abertas:
     st.info(f"Nenhuma solicitação com status **Em andamento** em **{aba}**.")
     st.stop()
 
-headers = all_values[0] if all_values else []
+st.markdown(f"### 2. Solicitações em andamento — {aba}")
+st.caption(f"{len(abertas)} registro(s) encontrado(s)")
 
-def col_val(row: dict, headers: list, col_letter: str) -> str:
-    idx = ord(col_letter.upper()) - ord("A")
-    if idx < len(headers):
-        return row.get(headers[idx], "").strip()
-    return ""
+# Montar dataframe para exibição
+df_rows = []
+label_map = {}
+for row_idx, r in abertas:
+    label = build_label(r)
+    df_rows.append({
+        "Solicitação": label,
+        "Cargo / Identificação": col_val(r, "E"),
+        "Data": col_val(r, "A"),
+        "Área": col_val(r, "H"),
+    })
+    label_map[label] = row_idx
 
-def build_label(row: dict, headers: list) -> str:
-    cargo = col_val(row, headers, "E")
-    ts    = col_val(row, headers, "A")
-    area  = col_val(row, headers, "H")
-    parts = [p for p in [cargo, ts, area] if p]
-    return " — ".join(parts) if parts else "(sem identificação)"
+df = pd.DataFrame(df_rows)
+st.dataframe(df, use_container_width=True, hide_index=True)
 
-opcoes = {build_label(r, headers): idx for idx, r in abertas}
+st.divider()
+
+# Seleção via dropdown
+st.markdown("### 3. Selecione a solicitação para atualizar")
 
 escolha = st.selectbox(
-    "Selecione a solicitação:",
-    options=list(opcoes.keys()),
+    "Solicitação:",
+    options=list(label_map.keys()),
     index=None,
     placeholder="Escolha...",
 )
 
 if escolha:
-    st.session_state.linha_selecionada = (escolha, opcoes[escolha])
+    st.session_state.linha_selecionada = (escolha, label_map[escolha])
 
 if not st.session_state.linha_selecionada:
     st.stop()
@@ -232,10 +226,10 @@ label_escolhido, row_idx = st.session_state.linha_selecionada
 st.divider()
 
 # ────────────────────────────────────────────
-# PASSO 3 — Escolher novo status
+# PASSO 4 — Escolher novo status
 # ────────────────────────────────────────────
 if st.session_state.concluido:
-    st.success(f"✅ Status atualizado com sucesso!")
+    st.success("✅ Status atualizado com sucesso!")
     if st.button("↩️  Fazer outra atualização", use_container_width=True):
         st.session_state.aba_selecionada   = None
         st.session_state.linha_selecionada = None
@@ -243,7 +237,7 @@ if st.session_state.concluido:
         st.rerun()
     st.stop()
 
-st.markdown(f"### 3. Novo status para:")
+st.markdown("### 4. Novo status")
 st.markdown(
     f"<div style='background:#121212; border:1px solid #292929; border-left:3px solid #6eda2c;"
     f"border-radius:8px; padding:12px 16px; margin-bottom:20px; color:#fff; font-size:0.97rem;'>"
@@ -254,12 +248,9 @@ st.markdown(
 btn_cols = st.columns(3)
 for i, status in enumerate(STATUS_OPTIONS):
     with btn_cols[i]:
-        color = STATUS_COLORS[status]
         if st.button(status, key=f"status_{status}", use_container_width=True):
             with st.spinner("Atualizando..."):
                 update_status(aba, row_idx, status)
-                send_chat_notification(aba, label_escolhido, status)
-                # Limpar cache para refletir mudança
                 get_gspread_client.clear()
             st.session_state.concluido = True
             st.rerun()
