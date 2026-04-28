@@ -133,13 +133,15 @@ def send_chat_notification(aba: str, label: str, status: str) -> None:
     tipo = {"Contratação": "vaga", "Demissão": "solicitação de demissão", "Alteração": "solicitação de alteração"}.get(aba, "solicitação")
     msg = f"A {tipo} {label} mudou o status para *{status}*"
     try:
-        requests.post(
+        resp = requests.post(
             f"{CHAT_URL}{CHAT_SPACE}/",
             json={"text": msg},
             timeout=8,
         )
-    except Exception:
-        pass  # notificação é best-effort
+        if not resp.ok:
+            st.warning(f"Chat: {resp.status_code} — {resp.text[:200]}")
+    except Exception as e:
+        st.warning(f"Chat erro: {e}")
 
 
 # ── Estado de sessão ──────────────────────────
