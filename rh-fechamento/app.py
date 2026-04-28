@@ -196,33 +196,25 @@ for row_idx, r in abertas:
     cargo = col_val(r, "E") or "—"
     data  = col_val(r, "A") or "—"
     area  = col_val(r, "H") or "—"
-    table_rows_html += f"""
-    <tr>
-      <td>{cargo}</td>
-      <td>{data}</td>
-      <td>{area}</td>
-    </tr>"""
+    table_rows_html += (
+        f"<tr>"
+        f"<td style='padding:10px 14px;border-bottom:1px solid #292929;color:#fff;'>{cargo}</td>"
+        f"<td style='padding:10px 14px;border-bottom:1px solid #292929;color:#fff;'>{data}</td>"
+        f"<td style='padding:10px 14px;border-bottom:1px solid #292929;color:#fff;'>{area}</td>"
+        f"</tr>"
+    )
 
-st.markdown(f"""
-<table style="width:100%; border-collapse:collapse; font-family:'Outfit',sans-serif; font-size:0.9rem;">
-  <thead>
-    <tr style="border-bottom:2px solid #6eda2c;">
-      <th style="text-align:left; padding:10px 14px; color:#a0a0a0; font-weight:500; text-transform:uppercase; font-size:0.75rem; letter-spacing:0.06em;">Cargo / Identificação</th>
-      <th style="text-align:left; padding:10px 14px; color:#a0a0a0; font-weight:500; text-transform:uppercase; font-size:0.75rem; letter-spacing:0.06em;">Data</th>
-      <th style="text-align:left; padding:10px 14px; color:#a0a0a0; font-weight:500; text-transform:uppercase; font-size:0.75rem; letter-spacing:0.06em;">Área</th>
-    </tr>
-  </thead>
-  <tbody style="color:#ffffff;">
-    {table_rows_html}
-  </tbody>
-</table>
-<style>
-  tbody tr {{ border-bottom: 1px solid #292929; }}
-  tbody tr:last-child {{ border-bottom: none; }}
-  tbody td {{ padding: 10px 14px; vertical-align: middle; }}
-  tbody tr:hover td {{ background: #1e1e1e; }}
-</style>
-""", unsafe_allow_html=True)
+th = "padding:10px 14px;color:#a0a0a0;font-weight:500;text-transform:uppercase;font-size:0.75rem;letter-spacing:0.06em;text-align:left;"
+st.html(
+    f"<table style='width:100%;border-collapse:collapse;font-family:Outfit,sans-serif;font-size:0.9rem;'>"
+    f"<thead><tr style='border-bottom:2px solid #6eda2c;'>"
+    f"<th style='{th}'>Cargo / Identificação</th>"
+    f"<th style='{th}'>Data</th>"
+    f"<th style='{th}'>Área</th>"
+    f"</tr></thead>"
+    f"<tbody>{table_rows_html}</tbody>"
+    f"</table>"
+)
 
 st.divider()
 
