@@ -4,7 +4,6 @@ Atualiza status nas abas Contratação / Demissão / Alteração da planilha de 
 """
 import streamlit as st
 import gspread
-import pandas as pd
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
@@ -188,21 +187,42 @@ if not abertas:
 st.markdown(f"### 2. Solicitações em andamento — {aba}")
 st.caption(f"{len(abertas)} registro(s) encontrado(s)")
 
-# Montar dataframe para exibição
-df_rows = []
+# Montar dados para exibição
 label_map = {}
+table_rows_html = ""
 for row_idx, r in abertas:
     label = build_label(r)
-    df_rows.append({
-        "Solicitação": label,
-        "Cargo / Identificação": col_val(r, "E"),
-        "Data": col_val(r, "A"),
-        "Área": col_val(r, "H"),
-    })
     label_map[label] = row_idx
+    cargo = col_val(r, "E") or "—"
+    data  = col_val(r, "A") or "—"
+    area  = col_val(r, "H") or "—"
+    table_rows_html += f"""
+    <tr>
+      <td>{cargo}</td>
+      <td>{data}</td>
+      <td>{area}</td>
+    </tr>"""
 
-df = pd.DataFrame(df_rows)
-st.dataframe(df, use_container_width=True, hide_index=True)
+st.markdown(f"""
+<table style="width:100%; border-collapse:collapse; font-family:'Outfit',sans-serif; font-size:0.9rem;">
+  <thead>
+    <tr style="border-bottom:2px solid #6eda2c;">
+      <th style="text-align:left; padding:10px 14px; color:#a0a0a0; font-weight:500; text-transform:uppercase; font-size:0.75rem; letter-spacing:0.06em;">Cargo / Identificação</th>
+      <th style="text-align:left; padding:10px 14px; color:#a0a0a0; font-weight:500; text-transform:uppercase; font-size:0.75rem; letter-spacing:0.06em;">Data</th>
+      <th style="text-align:left; padding:10px 14px; color:#a0a0a0; font-weight:500; text-transform:uppercase; font-size:0.75rem; letter-spacing:0.06em;">Área</th>
+    </tr>
+  </thead>
+  <tbody style="color:#ffffff;">
+    {table_rows_html}
+  </tbody>
+</table>
+<style>
+  tbody tr {{ border-bottom: 1px solid #292929; }}
+  tbody tr:last-child {{ border-bottom: none; }}
+  tbody td {{ padding: 10px 14px; vertical-align: middle; }}
+  tbody tr:hover td {{ background: #1e1e1e; }}
+</style>
+""", unsafe_allow_html=True)
 
 st.divider()
 
