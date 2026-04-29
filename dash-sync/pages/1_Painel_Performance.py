@@ -19,6 +19,14 @@ from utils.sheets import load_performance
 
 inject_css()
 
+# Fix nav text color
+st.markdown("""
+<style>
+[data-testid="stSidebarNavLink"] span { color: #ffffff !important; }
+[data-testid="stSidebarNavLink"][aria-current="page"] span { color: #6eda2c !important; }
+</style>
+""", unsafe_allow_html=True)
+
 # ── Paleta / helpers ────────────────────────────────────────────────────
 _ACCENT   = "#6eda2c"
 _MUTED    = "#a0a0a0"
@@ -97,7 +105,7 @@ def _indicator_card(ind: dict) -> None:
 
     st.markdown(
         f"<div style='margin-bottom:4px;'>{_status_badge(ind['status_emoji'], color, name)}</div>"
-        + (f"<div style='font-size:0.72rem;color:#4c4c4c;margin-bottom:4px;'>Meta: {ind['meta_raw']}</div>" if ind['meta_raw'] and ind['meta_raw'] != '-' else ""),
+        + (f"<div style='font-size:0.72rem;color:#ffffff;margin-bottom:4px;'>Meta: {ind['meta_raw']}</div>" if ind['meta_raw'] and ind['meta_raw'] != '-' else ""),
         unsafe_allow_html=True,
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -122,7 +130,17 @@ with col_f:
 if area_filter != "Todas":
     indicators = [i for i in indicators if i["area"] == area_filter]
 
-st.caption(f"Mostrando as últimas 10 semanas disponíveis · {len(indicators)} indicadores")
+# ── Legenda de cores ────────────────────────────────────────────────────
+st.markdown("""
+<div style='display:flex;gap:20px;align-items:center;margin:4px 0 12px 0;flex-wrap:wrap;'>
+  <span style='font-size:0.75rem;color:#a0a0a0;'>Status da Meta (coluna O):</span>
+  <span style='font-size:0.78rem;color:#6eda2c;'>● Atingindo a meta</span>
+  <span style='font-size:0.78rem;color:#f5c518;'>● Atenção</span>
+  <span style='font-size:0.78rem;color:#e63946;'>● Abaixo da meta</span>
+</div>
+""", unsafe_allow_html=True)
+
+st.caption(f"Últimas 10 semanas disponíveis · {len(indicators)} indicadores")
 st.divider()
 
 # ── Renderiza por área ──────────────────────────────────────────────────

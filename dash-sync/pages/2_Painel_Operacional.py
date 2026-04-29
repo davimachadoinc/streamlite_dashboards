@@ -19,6 +19,14 @@ from utils.sheets import load_operacional
 
 inject_css()
 
+# Fix nav text color
+st.markdown("""
+<style>
+[data-testid="stSidebarNavLink"] span { color: #ffffff !important; }
+[data-testid="stSidebarNavLink"][aria-current="page"] span { color: #6eda2c !important; }
+</style>
+""", unsafe_allow_html=True)
+
 # ── Paleta / helpers ────────────────────────────────────────────────────
 _ACCENT  = "#6eda2c"
 _MUTED   = "#a0a0a0"
@@ -96,7 +104,7 @@ def _indicator_card(ind: dict) -> None:
     fig.update_layout(showlegend=False, height=200)
 
     limite_label = (
-        f"<div style='font-size:0.72rem;color:#4c4c4c;margin-bottom:4px;'>Limite saudável: {ind['limite_raw']}</div>"
+        f"<div style='font-size:0.72rem;color:#ffffff;margin-bottom:4px;'>Limite saudável: {ind['limite_raw']}</div>"
         if ind["limite_raw"] and ind["limite_raw"] not in ("-", "em breve")
         else ""
     )
@@ -128,7 +136,17 @@ with col_f:
 if area_filter != "Todas":
     indicators = [i for i in indicators if i["area"] == area_filter]
 
-st.caption(f"Mostrando as últimas 10 semanas disponíveis · {len(indicators)} indicadores")
+# ── Legenda de cores ────────────────────────────────────────────────────
+st.markdown("""
+<div style='display:flex;gap:20px;align-items:center;margin:4px 0 12px 0;flex-wrap:wrap;'>
+  <span style='font-size:0.75rem;color:#a0a0a0;'>Status (coluna L):</span>
+  <span style='font-size:0.78rem;color:#6eda2c;'>● Saudável</span>
+  <span style='font-size:0.78rem;color:#f5c518;'>● Atenção</span>
+  <span style='font-size:0.78rem;color:#e63946;'>● Crítico</span>
+</div>
+""", unsafe_allow_html=True)
+
+st.caption(f"Últimas 10 semanas disponíveis · {len(indicators)} indicadores")
 st.divider()
 
 # ── Renderiza por área ──────────────────────────────────────────────────
