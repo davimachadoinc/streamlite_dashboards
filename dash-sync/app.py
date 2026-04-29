@@ -21,6 +21,26 @@ def _is_allowed(email: str) -> bool:
 
 
 if not st.user.is_logged_in:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stButton"] > button {
+            background: #1E1E1E !important;
+            color: #ffffff !important;
+            border: 1px solid #292929 !important;
+            border-radius: 10px !important;
+            font-weight: 500 !important;
+            transition: all 0.2s ease;
+        }
+        [data-testid="stButton"] > button:hover {
+            background: rgba(110,218,44,0.1) !important;
+            border-color: #6eda2c !important;
+            color: #6eda2c !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     _, col, _ = st.columns([1, 2, 1])
     with col:
         st.markdown(
@@ -36,7 +56,7 @@ if not st.user.is_logged_in:
             """,
             unsafe_allow_html=True,
         )
-        if st.button("🔐  Entrar com Google", use_container_width=True):
+        if st.button("Entrar com Google", use_container_width=True):
             st.login()
     st.stop()
 
