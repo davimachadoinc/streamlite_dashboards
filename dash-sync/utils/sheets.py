@@ -23,8 +23,7 @@ STATUS_COLOR = {
 }
 
 def _get_client() -> gspread.Client:
-    raw = st.secrets["connections"]["bigquery_tech"]["credentials"]
-    info = json.loads(raw)
+    info = dict(st.secrets["gcp_service_account"])
     creds = Credentials.from_service_account_info(info, scopes=_SCOPES)
     return gspread.authorize(creds)
 
