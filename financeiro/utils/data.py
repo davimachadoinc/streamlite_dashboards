@@ -424,11 +424,11 @@ def load_take_rate_snapshot() -> dict:
       AND DATE_TRUNC(CAST(dt_liquidacao_recb AS DATE), MONTH) = DATE_TRUNC(CURRENT_DATE(), MONTH)
     """
     df_interm = _bq_query(q_interm, "bigquery_bi")
-    if df_interm.empty or df_interm["dia_liquidacao"].iloc[0] is None:
+    if df_interm.empty or pd.isnull(df_interm["dia_liquidacao"].iloc[0]):
         return {}
 
     dia = df_interm["dia_liquidacao"].iloc[0]
-    dia_str = str(dia)[:10]
+    dia_str = pd.Timestamp(dia).strftime("%Y-%m-%d")
     receita_intermediacao = float(df_interm["receita_intermediacao"].iloc[0])
 
     # Passo 2: TPV do último dia de liquidação (BQ_TECH)
@@ -497,7 +497,11 @@ def load_take_rate_historico() -> pd.DataFrame:
         return pd.DataFrame()
 
     df_interm["mes"]     = pd.to_datetime(df_interm["mes"])
-    df_interm["dia_ref"] = df_interm["dia_ref"].astype(str).str[:10]
+    df_interm["dia_ref"] = pd.to_datetime(df_interm["dia_ref"]).dt.strftime("%Y-%m-%d")
+    df_interm = df_interm[df_interm["dia_ref"].notna() & (df_interm["dia_ref"] != "NaT")]
+
+    if df_interm.empty:
+        return pd.DataFrame()
 
     # Passo 2: TPV diário para os dias de referência (BQ_TECH)
     dias_ref = ", ".join(f"DATE '{d}'" for d in df_interm["dia_ref"].unique())
@@ -1132,6 +1136,77 @@ def load_inadimplencia_top_clientes(dias: int = 30) -> pd.DataFrame:
     df = _bq_query(query, "bigquery_bi")
     if not df.empty:
         df["plano"] = df["plano"].str.lower()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_mensalidade_historico(n_months: int = 36) -> pd.DataFrame:
+    """
+    Receita de mensalidade (1.2.2) por plano e mês — histórico completo via UNION ALL.
+    Cobre hist (2021–jan/2025) + all (jan/2025–atual) deduplicando na janela de transição.
+    Retorna: mes, plano, clientes, receita_emitida, receita_liquidada, ticket_medio.
+    """
+    interval = f"INTERVAL {n_months} MONTH" if n_months > 0 else "INTERVAL 60 MONTH"
+    query = f"""
+    WITH boletos AS (
+      SELECT id_recebimento_recb, st_sincro_sac, dt_vencimento_recb,
+             comp_valor, fl_status_recb, comp_st_descricao_prd, comp_st_conta_cont
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-hist`
+      UNION ALL
+      SELECT id_recebimento_recb, st_sincro_sac, dt_vencimento_recb,
+             comp_valor, fl_status_recb, comp_st_descricao_prd, comp_st_conta_cont
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+    ),
+    dedup AS (
+      SELECT *,
+        ROW_NUMBER() OVER (PARTITION BY id_recebimento_recb ORDER BY dt_vencimento_recb) AS rn
+      FROM boletos
+      WHERE comp_st_conta_cont = '1.2.2'
+        AND CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), {interval})
+        AND CAST(dt_vencimento_recb AS DATE) <= LAST_DAY(CURRENT_DATE())
+        AND {_EXCL_MODULOS.format(col="comp_st_descricao_prd")}
+        AND comp_st_descricao_prd != 'Reajuste Anual'
+    ),
+    boleto_plano AS (
+      SELECT id_recebimento_recb,
+        MAX(CASE
+          WHEN comp_st_descricao_prd LIKE '%[PRO]%'         THEN 'pro'
+          WHEN comp_st_descricao_prd LIKE '%[LITE]%'        THEN 'lite'
+          WHEN comp_st_descricao_prd LIKE '%[STARTER]%'     THEN 'starter'
+          WHEN comp_st_descricao_prd LIKE '%[FILHA]%'       THEN 'filha'
+          WHEN comp_st_descricao_prd LIKE '%[BASIC]%'       THEN 'basic'
+          WHEN comp_st_descricao_prd LIKE '%0 - 9 Igrejas%' THEN 'pro'
+          WHEN comp_st_descricao_prd LIKE '%10+ Igrejas%'   THEN 'pro'
+          WHEN comp_st_descricao_prd LIKE '%App Lite%'      THEN 'lite'
+          WHEN comp_st_descricao_prd LIKE '%App da Igreja%' THEN 'starter'
+          ELSE NULL
+        END) AS plano_boleto
+      FROM dedup WHERE rn = 1
+      GROUP BY 1
+    )
+    SELECT
+      DATE_TRUNC(CAST(d.dt_vencimento_recb AS DATE), MONTH) AS mes,
+      COALESCE(
+        {_PLAN_CASE.format(col="d.comp_st_descricao_prd")},
+        bp.plano_boleto,
+        'outros'
+      ) AS plano,
+      COUNT(DISTINCT d.st_sincro_sac)                                        AS clientes,
+      SUM(d.comp_valor)                                                       AS receita_emitida,
+      SUM(CASE WHEN d.fl_status_recb = '1' THEN d.comp_valor ELSE 0 END)     AS receita_liquidada
+    FROM dedup d
+    LEFT JOIN boleto_plano bp ON d.id_recebimento_recb = bp.id_recebimento_recb
+    WHERE d.rn = 1
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"]   = pd.to_datetime(df["mes"])
+        df["plano"] = df["plano"].str.lower()
+        df["ticket_medio"] = (
+            df["receita_emitida"] / df["clientes"].where(df["clientes"] > 0)
+        ).round(2)
     return df
 
 
