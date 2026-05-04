@@ -405,7 +405,7 @@ def load_transactions_por_metodo() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def load_take_rate_snapshot() -> dict:
+def load_take_rate_snapshot_v2() -> dict:
     """
     Snapshot do take rate do mês corrente.
     A receita de intermediação é lançada manualmente, então o cálculo só
@@ -460,7 +460,7 @@ def load_take_rate_snapshot() -> dict:
 
 
 @st.cache_data(ttl=3600)
-def load_take_rate_historico() -> pd.DataFrame:
+def load_take_rate_historico_v2() -> pd.DataFrame:
     """
     Take rate histórico mensal.
     A receita de intermediação é lançada manualmente, então cada mês só

@@ -20,7 +20,9 @@ from utils.data import (
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
     load_transactions_por_metodo, load_transactions_clientes_por_mes,
-    load_intermediacao_mensal, load_take_rate_snapshot, load_take_rate_historico,
+    load_intermediacao_mensal,
+    load_take_rate_snapshot_v2 as load_take_rate_snapshot,
+    load_take_rate_historico_v2 as load_take_rate_historico,
 )
 
 inject_css()
@@ -365,19 +367,31 @@ else:
         no_data("Sem histórico de take rate para o período.")
     else:
         df_tr_fmt, x_order_tr = mes_fmt_ordered(df_tr_hist_f)
+        # Compat: aceita 'dia_max' (regra nova) ou 'dia_ref' (resultado em cache antigo)
+        dia_col = "dia_max" if "dia_max" in df_tr_fmt.columns else (
+            "dia_ref" if "dia_ref" in df_tr_fmt.columns else None
+        )
         col_tr_a, col_tr_b = st.columns(2)
 
         with col_tr_a:
             st.subheader("Take Rate (%) — Evolução Mensal")
             fig = go.Figure()
-            fig.add_scatter(
+            scatter_kwargs = dict(
                 x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["take_rate_pct"],
                 name="Take Rate (%)", mode="lines+markers",
                 line=dict(color=PALETTE[0], width=2.5),
                 marker=dict(size=7),
-                hovertemplate="<b>%{x}</b><br>Take Rate: %{y:.4f}%<br>Até: %{customdata}<extra></extra>",
-                customdata=df_tr_fmt["dia_max"],
             )
+            if dia_col is not None:
+                scatter_kwargs["hovertemplate"] = (
+                    "<b>%{x}</b><br>Take Rate: %{y:.4f}%<br>Até: %{customdata}<extra></extra>"
+                )
+                scatter_kwargs["customdata"] = df_tr_fmt[dia_col]
+            else:
+                scatter_kwargs["hovertemplate"] = (
+                    "<b>%{x}</b><br>Take Rate: %{y:.4f}%<extra></extra>"
+                )
+            fig.add_scatter(**scatter_kwargs)
             fig.update_layout(
                 xaxis=dict(categoryorder="array", categoryarray=x_order_tr, type="category"),
                 yaxis=dict(ticksuffix="%"),
