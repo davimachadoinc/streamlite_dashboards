@@ -326,15 +326,17 @@ st.subheader("Take Rate — Intermediação de Negócios / TPV")
 if snap_tr == {} and df_tr_hist.empty:
     no_data("Sem dados suficientes para calcular o Take Rate.")
 else:
-    # ── Snapshot — intermediação do mês / TPV do último dia de liquidação ───
-    snap_dia = snap_tr.get("dia", "—")
-    snap_int = snap_tr.get("receita_intermediacao")
-    snap_tpv = snap_tr.get("tpv")
-    snap_pct = snap_tr.get("take_rate_pct")
+    # ── Snapshot — receita e TPV do mês até o último dia com receita lançada ───
+    snap_inicio = snap_tr.get("inicio_mes", "—")
+    snap_dia    = snap_tr.get("dia_max", "—")
+    snap_int    = snap_tr.get("receita_intermediacao")
+    snap_tpv    = snap_tr.get("tpv")
+    snap_pct    = snap_tr.get("take_rate_pct")
 
     st.caption(
-        f"Snapshot: intermediação liquidada no mês atual · "
-        f"TPV do último dia de liquidação: **{snap_dia}**"
+        f"Receita de intermediação é lançada manualmente. "
+        f"Período considerado: **{snap_inicio} → {snap_dia}** "
+        f"(último dia com lançamento no mês corrente)."
     )
 
     sn1, sn2, sn3 = st.columns(3)
@@ -345,12 +347,12 @@ else:
         )
     with sn2:
         st.metric(
-            "Intermediação Liquidada no Mês (R$)",
+            "Intermediação no Período (R$)",
             f"R$ {snap_int:,.2f}" if snap_int is not None else "—",
         )
     with sn3:
         st.metric(
-            "TPV no Último Dia de Liquidação (R$)",
+            "TPV no Período (R$)",
             f"R$ {snap_tpv:,.2f}" if snap_tpv is not None else "—",
         )
 
@@ -373,8 +375,8 @@ else:
                 name="Take Rate (%)", mode="lines+markers",
                 line=dict(color=PALETTE[0], width=2.5),
                 marker=dict(size=7),
-                hovertemplate="<b>%{x}</b><br>Take Rate: %{y:.4f}%<br>Ref: %{customdata}<extra></extra>",
-                customdata=df_tr_fmt["dia_ref"],
+                hovertemplate="<b>%{x}</b><br>Take Rate: %{y:.4f}%<br>Até: %{customdata}<extra></extra>",
+                customdata=df_tr_fmt["dia_max"],
             )
             fig.update_layout(
                 xaxis=dict(categoryorder="array", categoryarray=x_order_tr, type="category"),
@@ -383,11 +385,11 @@ else:
             st.plotly_chart(chart_layout(fig, height=360), use_container_width=True)
 
         with col_tr_b:
-            st.subheader("Intermediação (R$) e TPV do Dia — Mensal")
+            st.subheader("Intermediação e TPV (R$) — Acumulado do Mês")
             fig = go.Figure()
             fig.add_bar(
                 x=df_tr_fmt["mes_fmt"], y=df_tr_fmt["tpv"],
-                name="TPV do Dia (R$)", marker_color=PALETTE[3], opacity=0.7,
+                name="TPV (R$)", marker_color=PALETTE[3], opacity=0.7,
                 hovertemplate="<b>%{x}</b><br>TPV: R$ %{y:,.2f}<extra></extra>",
             )
             fig.add_bar(
