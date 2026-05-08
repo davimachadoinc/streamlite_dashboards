@@ -906,7 +906,20 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 
 @st.cache_data(ttl=3600)
-def load_inadimplencia_serie() -> pd.DataFrame:
+def load_grupos() -> list[str]:
+    """Retorna grupos disponíveis em splgc-grupo (ex: Ana, Priscila)."""
+    query = """
+    SELECT DISTINCT grupo
+    FROM `business-intelligence-467516.Splgc.splgc-grupo`
+    WHERE grupo IS NOT NULL
+    ORDER BY grupo
+    """
+    df = _bq_query(query, "bigquery_bi")
+    return sorted(df["grupo"].tolist()) if not df.empty else []
+
+
+@st.cache_data(ttl=3600)
+def load_inadimplencia_serie(grupo: str | None = None) -> pd.DataFrame:
     """
     Série histórica de inadimplência — snapshot por dia útil (últimos 6 meses).
 
@@ -920,7 +933,11 @@ def load_inadimplencia_serie() -> pd.DataFrame:
     for pago, ele sai do numerador do dia 13/02 em diante.
     """
     # --- 1. Carrega boletos brutos do BigQuery ---
-    query = """
+    _grupo_join = (
+        f"INNER JOIN `business-intelligence-467516.Splgc.splgc-grupo` g\n"
+        f"      ON b.id_sacado_sac = g.id_sacado_sac AND g.grupo = '{grupo}'"
+    ) if grupo else ""
+    query = f"""
     SELECT
       CAST(b.dt_vencimento_recb  AS DATE) AS dia_venc,
       CAST(b.dt_liquidacao_recb  AS DATE) AS dia_pago,
@@ -928,6 +945,7 @@ def load_inadimplencia_serie() -> pd.DataFrame:
     FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
     LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
       ON b.id_sacado_sac = c.id_sacado_sac
+    {_grupo_join}
     WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
       AND CAST(b.dt_vencimento_recb AS DATE)
             >= DATE_SUB(CURRENT_DATE(), INTERVAL 18 MONTH)
@@ -1003,11 +1021,15 @@ def load_inadimplencia_serie() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def load_inadimplencia_por_plano() -> pd.DataFrame:
+def load_inadimplencia_por_plano(grupo: str | None = None) -> pd.DataFrame:
     """
     Inadimplência 30d atual agregada por plano base.
     Retorna clientes únicos inadimplentes e valor em aberto por plano.
     """
+    _grupo_join = (
+        f"INNER JOIN `business-intelligence-467516.Splgc.splgc-grupo` g\n"
+        f"      ON b.id_sacado_sac = g.id_sacado_sac AND g.grupo = '{grupo}'"
+    ) if grupo else ""
     query = f"""
     SELECT
       {_PLAN_CASE.format(col="b.comp_st_descricao_prd")}              AS plano,
@@ -1016,6 +1038,7 @@ def load_inadimplencia_por_plano() -> pd.DataFrame:
     FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
     LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
       ON b.id_sacado_sac = c.id_sacado_sac
+    {_grupo_join}
     WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
       AND b.dt_liquidacao_recb IS NULL
       AND CAST(b.dt_vencimento_recb AS DATE)
@@ -1086,11 +1109,15 @@ def load_inadimplencia_por_frequencia() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def load_inadimplencia_top_clientes(dias: int = 30) -> pd.DataFrame:
+def load_inadimplencia_top_clientes(dias: int = 30, grupo: str | None = None) -> pd.DataFrame:
     """
     Top 30 clientes com maior valor em aberto na janela rolante de N dias.
     Só conta clientes com comp_valor > 1 e que já pagaram pelo menos um boleto.
     """
+    _grupo_join = (
+        f"INNER JOIN `business-intelligence-467516.Splgc.splgc-grupo` g\n"
+        f"        ON b.id_sacado_sac = g.id_sacado_sac AND g.grupo = '{grupo}'"
+    ) if grupo else ""
     query = f"""
     WITH inad AS (
       SELECT
@@ -1102,6 +1129,7 @@ def load_inadimplencia_top_clientes(dias: int = 30) -> pd.DataFrame:
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all` b
       LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
         ON b.id_sacado_sac = c.id_sacado_sac
+      {_grupo_join}
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
         AND b.dt_liquidacao_recb IS NULL
         AND CAST(b.dt_vencimento_recb AS DATE)

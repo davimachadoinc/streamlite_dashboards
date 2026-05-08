@@ -28,6 +28,7 @@ from utils.data import (
     PALETTE, PLAN_LABELS, PLAN_COLORS,
     chart_layout, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data, fmt_brl,
+    load_grupos,
     load_inadimplencia_serie, load_inadimplencia_por_plano,
     load_inadimplencia_top_clientes,
 )
@@ -35,18 +36,23 @@ from utils.data import (
 inject_css()
 
 # ── Header ────────────────────────────────────
-col_title, col_filter = st.columns([8, 2], vertical_alignment="bottom")
+col_title, col_grupo, col_filter = st.columns([6, 2, 2], vertical_alignment="bottom")
 with col_title:
     st.markdown("<h1>Inadimplência <span>& Perfil</span></h1>", unsafe_allow_html=True)
+with col_grupo:
+    grupos = load_grupos()
+    opcoes_grupo = ["Todos"] + grupos
+    sel_grupo = st.selectbox("Grupo", opcoes_grupo, index=0)
+    grupo_filtro = None if sel_grupo == "Todos" else sel_grupo
 with col_filter:
     n_months = period_selector()
 
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando dados de inadimplência..."):
-    df_serie  = load_inadimplencia_serie()
-    df_plano  = load_inadimplencia_por_plano()
-    df_top30  = load_inadimplencia_top_clientes(30)
-    df_top90  = load_inadimplencia_top_clientes(90)
+    df_serie  = load_inadimplencia_serie(grupo=grupo_filtro)
+    df_plano  = load_inadimplencia_por_plano(grupo=grupo_filtro)
+    df_top30  = load_inadimplencia_top_clientes(30, grupo=grupo_filtro)
+    df_top90  = load_inadimplencia_top_clientes(90, grupo=grupo_filtro)
 
 if df_serie.empty:
     no_data("Nenhum dado de inadimplência encontrado.")
