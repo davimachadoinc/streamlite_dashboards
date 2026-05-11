@@ -142,6 +142,11 @@ def _bq_query(query: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _valid_company_id(cid: str) -> bool:
+    """tertiarygroup_id é numérico e curto (≤ 8 dígitos)."""
+    return cid.isdigit() and 1 <= len(cid) <= 8
+
+
 @st.cache_data(ttl=3600)
 def load_fabiano_ids() -> list[str]:
     """
@@ -154,12 +159,15 @@ def load_fabiano_ids() -> list[str]:
 @st.cache_data(ttl=3600)
 def load_fabiano_sheet_data() -> dict[str, dict]:
     """
-    Lê a planilha Reg Assinat e retorna {company_id: {name, entry_date}}.
-    Combina com BQ para clientes recentes sem registro na planilha.
+    Regra de fonte de dados:
+    - Planilha (Reg Assinat): fonte canônica para todos os fechamentos até abril/2026.
+    - BQ Fechamentos_com_ajustes: complementa com novos fechamentos a partir de maio/2026.
+
+    Retorna {company_id: {name, entry_date}}.
     """
     data: dict[str, dict] = {}
 
-    # 1. Planilha (fonte histórica)
+    # 1. Planilha — fonte de todos os fechamentos até abril/2026
     try:
         creds = _get_bi_credentials(["https://www.googleapis.com/auth/spreadsheets.readonly"])
         svc = googleapiclient.discovery.build("sheets", "v4", credentials=creds, cache_discovery=False)
@@ -173,16 +181,16 @@ def load_fabiano_sheet_data() -> dict[str, dict]:
                 sr_owner     = str(row[5]).strip().lower()
                 company_name = str(row[2]).strip() if len(row) > 2 else ""
                 entry_date   = str(row[1]).strip() if len(row) > 1 else ""
-                if "fabiano lomar" in sr_owner and company_id and company_id not in ("0", ""):
+                if "fabiano lomar" in sr_owner and _valid_company_id(company_id):
                     if company_id not in data:
                         data[company_id] = {"name": company_name, "entry": entry_date}
     except Exception as e:
         st.warning(f"Planilha indisponível: {e}. Usando somente dados do BigQuery.")
 
-    # 2. BQ (clientes recentes — email ou nome)
+    # 2. BQ — apenas fechamentos de maio/2026 em diante (novos, não cobertos pela planilha)
     q = """
     SELECT DISTINCT
-      TRIM(tertiarygroup_id)  AS id,
+      TRIM(tertiarygroup_id)      AS id,
       company_name,
       CAST(first_payment AS DATE) AS first_payment
     FROM `business-intelligence-467516.Fechamento_vendas.Fechamentos_com_ajustes`
@@ -190,12 +198,13 @@ def load_fabiano_sheet_data() -> dict[str, dict]:
         OR TRIM(sales_owner) = 'fabiano.lomar@inchurch.com.br')
       AND tertiarygroup_id IS NOT NULL
       AND TRIM(tertiarygroup_id) != ''
+      AND CAST(first_payment AS DATE) >= '2026-05-01'
     """
     df_bq = _bq_query(q)
     if not df_bq.empty:
         for _, row in df_bq.iterrows():
             cid = str(row["id"]).strip()
-            if cid and cid not in data:
+            if _valid_company_id(cid) and cid not in data:
                 data[cid] = {
                     "name": row.get("company_name", ""),
                     "entry": str(row["first_payment"]) if pd.notna(row["first_payment"]) else "",
