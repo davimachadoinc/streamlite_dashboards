@@ -187,7 +187,8 @@ def load_fabiano_sheet_data() -> dict[str, dict]:
     except Exception as e:
         st.warning(f"Planilha indisponível: {e}. Usando somente dados do BigQuery.")
 
-    # 2. BQ — apenas fechamentos de maio/2026 em diante (novos, não cobertos pela planilha)
+    # 2. BQ — complementa com todos os fechamentos não presentes na planilha
+    #    (a planilha pode estar desatualizada; BQ é fonte para qualquer data ausente)
     q = """
     SELECT DISTINCT
       TRIM(tertiarygroup_id)      AS id,
@@ -198,7 +199,6 @@ def load_fabiano_sheet_data() -> dict[str, dict]:
         OR TRIM(sales_owner) = 'fabiano.lomar@inchurch.com.br')
       AND tertiarygroup_id IS NOT NULL
       AND TRIM(tertiarygroup_id) != ''
-      AND CAST(first_payment AS DATE) >= '2026-05-01'
     """
     df_bq = _bq_query(q)
     if not df_bq.empty:
@@ -237,31 +237,35 @@ def load_carteira_mensal() -> pd.DataFrame:
     id_list = _ids_to_sql_list(ids)
 
     query = f"""
-    WITH boletos AS (
-      SELECT id_recebimento_recb, st_sincro_sac, dt_vencimento_recb,
-             comp_valor, fl_status_recb, comp_st_conta_cont
-      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-hist`
-      WHERE st_sincro_sac IN {id_list}
-        AND comp_st_conta_cont = '1.2.2'
-      UNION ALL
-      SELECT id_recebimento_recb, st_sincro_sac, dt_vencimento_recb,
-             comp_valor, fl_status_recb, comp_st_conta_cont
+    WITH ids_in_all AS (
+      SELECT DISTINCT id_recebimento_recb
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
       WHERE st_sincro_sac IN {id_list}
         AND comp_st_conta_cont = '1.2.2'
     ),
-    dedup AS (
-      SELECT *,
-        ROW_NUMBER() OVER (PARTITION BY id_recebimento_recb ORDER BY dt_vencimento_recb) AS rn
-      FROM boletos
+    boletos AS (
+      -- hist: apenas boletos ausentes na tabela all (evita duplicatas entre tabelas)
+      SELECT h.id_recebimento_recb, h.st_sincro_sac, h.dt_vencimento_recb,
+             h.comp_valor, h.fl_status_recb
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-hist` h
+      LEFT JOIN ids_in_all ia ON h.id_recebimento_recb = ia.id_recebimento_recb
+      WHERE h.st_sincro_sac IN {id_list}
+        AND h.comp_st_conta_cont = '1.2.2'
+        AND ia.id_recebimento_recb IS NULL
+      UNION ALL
+      -- all: todas as linhas de comp (fonte única = sem duplicatas internas)
+      SELECT id_recebimento_recb, st_sincro_sac, dt_vencimento_recb,
+             comp_valor, fl_status_recb
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+      WHERE st_sincro_sac IN {id_list}
+        AND comp_st_conta_cont = '1.2.2'
     )
     SELECT
       DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH)              AS mes,
       COUNT(DISTINCT st_sincro_sac)                                     AS clientes,
       SUM(comp_valor)                                                   AS receita_emitida,
       SUM(CASE WHEN fl_status_recb = '1' THEN comp_valor ELSE 0 END)   AS receita_liquidada
-    FROM dedup
-    WHERE rn = 1
+    FROM boletos
     GROUP BY 1
     ORDER BY 1
     """
@@ -289,23 +293,26 @@ def load_carteira_clientes() -> pd.DataFrame:
     id_list = _ids_to_sql_list(ids)
 
     query = f"""
-    WITH boletos AS (
-      SELECT id_recebimento_recb, st_sincro_sac, dt_vencimento_recb,
-             comp_valor, fl_status_recb
-      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-hist`
+    WITH ids_in_all AS (
+      SELECT DISTINCT id_recebimento_recb
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
       WHERE st_sincro_sac IN {id_list}
         AND comp_st_conta_cont = '1.2.2'
+    ),
+    boletos AS (
+      SELECT h.id_recebimento_recb, h.st_sincro_sac, h.dt_vencimento_recb,
+             h.comp_valor, h.fl_status_recb
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-hist` h
+      LEFT JOIN ids_in_all ia ON h.id_recebimento_recb = ia.id_recebimento_recb
+      WHERE h.st_sincro_sac IN {id_list}
+        AND h.comp_st_conta_cont = '1.2.2'
+        AND ia.id_recebimento_recb IS NULL
       UNION ALL
       SELECT id_recebimento_recb, st_sincro_sac, dt_vencimento_recb,
              comp_valor, fl_status_recb
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
       WHERE st_sincro_sac IN {id_list}
         AND comp_st_conta_cont = '1.2.2'
-    ),
-    dedup AS (
-      SELECT *,
-        ROW_NUMBER() OVER (PARTITION BY id_recebimento_recb ORDER BY dt_vencimento_recb) AS rn
-      FROM boletos
     )
     SELECT
       a.st_sincro_sac,
@@ -314,10 +321,9 @@ def load_carteira_clientes() -> pd.DataFrame:
       COUNT(DISTINCT DATE_TRUNC(CAST(a.dt_vencimento_recb AS DATE), MONTH))  AS meses_faturados,
       SUM(a.comp_valor)                                                       AS receita_emitida,
       SUM(CASE WHEN a.fl_status_recb = '1' THEN a.comp_valor ELSE 0 END)     AS receita_liquidada
-    FROM dedup a
+    FROM boletos a
     LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
       ON a.st_sincro_sac = c.st_sincro_sac
-    WHERE a.rn = 1
     GROUP BY 1, 2
     """
     df = _bq_query(query)
