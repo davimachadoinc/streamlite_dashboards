@@ -144,8 +144,7 @@ with tab1:
         yaxis2=dict(
             overlaying="y", side="right", showgrid=False,
             ticksuffix="%", range=[0, 120],
-            title="% Pago",
-            titlefont=dict(color=PALETTE[8]),
+            title=dict(text="% Pago", font=dict(color=PALETTE[8])),
             tickfont=dict(color=PALETTE[8]),
             zeroline=False,
         ),
