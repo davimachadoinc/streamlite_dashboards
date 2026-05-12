@@ -454,5 +454,9 @@ def load_carteira_detalhe_mensal() -> pd.DataFrame:
     df["cliente"] = df["cliente"].fillna(df["id"])
     df["comissao_5pct"] = (df["liq_comissao"] * COMISSAO_CARTEIRA_PCT).round(2)
     df["pct_pago"]  = (df["liquidada"] / df["emitida"].where(df["emitida"] > 0) * 100).round(1)
-    df["elegivel"]  = df["liq_comissao"] > 0
+    # elegível = está dentro da janela de 12 meses (independente de ter pago ou não)
+    df["elegivel"]  = (
+        (df["mes"] > df["entry_month"]) &
+        (df["mes"] <= df["entry_month"] + pd.DateOffset(months=12))
+    )
     return df
