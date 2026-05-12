@@ -326,15 +326,28 @@ def load_carteira_clientes() -> pd.DataFrame:
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
       WHERE st_sincro_sac IN {id_list}
         AND comp_st_conta_cont = '1.2.2'
+    ),
+    client_entry AS (
+      SELECT st_sincro_sac,
+             DATE_TRUNC(MIN(CAST(dt_vencimento_recb AS DATE)), MONTH) AS entry_month
+      FROM boletos
+      GROUP BY 1
     )
     SELECT
       a.st_sincro_sac,
-      c.st_nome_sac                                                          AS nome_splgc,
-      MIN(DATE_TRUNC(CAST(a.dt_vencimento_recb AS DATE), MONTH))             AS primeiro_boleto,
-      COUNT(DISTINCT DATE_TRUNC(CAST(a.dt_vencimento_recb AS DATE), MONTH))  AS meses_faturados,
-      SUM(a.comp_valor)                                                       AS receita_emitida,
-      SUM(CASE WHEN a.fl_status_recb = '1' THEN a.comp_valor ELSE 0 END)     AS receita_liquidada
+      c.st_nome_sac                                                                AS nome_splgc,
+      MIN(DATE_TRUNC(CAST(a.dt_vencimento_recb AS DATE), MONTH))                   AS primeiro_boleto,
+      COUNT(DISTINCT DATE_TRUNC(CAST(a.dt_vencimento_recb AS DATE), MONTH))        AS meses_faturados,
+      SUM(a.comp_valor)                                                             AS receita_emitida,
+      SUM(CASE WHEN a.fl_status_recb = '1' THEN a.comp_valor ELSE 0 END)           AS receita_liquidada,
+      SUM(CASE
+        WHEN a.fl_status_recb = '1'
+          AND DATE_TRUNC(CAST(a.dt_vencimento_recb AS DATE), MONTH) > e.entry_month
+          AND DATE_TRUNC(CAST(a.dt_vencimento_recb AS DATE), MONTH) <= DATE_ADD(e.entry_month, INTERVAL 12 MONTH)
+        THEN a.comp_valor ELSE 0
+      END)                                                                           AS receita_liq_comissao
     FROM boletos a
+    JOIN client_entry e ON a.st_sincro_sac = e.st_sincro_sac
     LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
       ON a.st_sincro_sac = c.st_sincro_sac
     GROUP BY 1, 2
@@ -351,7 +364,7 @@ def load_carteira_clientes() -> pd.DataFrame:
     df["cliente"] = df["cliente"].fillna(df["st_sincro_sac"])
 
     df["primeiro_boleto"] = pd.to_datetime(df["primeiro_boleto"], errors="coerce")
-    df["comissao_5pct"] = (df["receita_liquidada"] * COMISSAO_CARTEIRA_PCT).round(2)
+    df["comissao_5pct"] = (df["receita_liq_comissao"] * COMISSAO_CARTEIRA_PCT).round(2)
     df["pct_pago"] = (
         df["receita_liquidada"] / df["receita_emitida"].where(df["receita_emitida"] > 0) * 100
     ).round(1)
