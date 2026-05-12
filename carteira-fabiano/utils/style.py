@@ -60,6 +60,11 @@ div[data-baseweb="tooltip"] { display: none !important; }
 div[data-testid="stAlert"] { background: var(--bg-card) !important; border-radius: 10px !important; border: 1px solid var(--border) !important; }
 div[data-testid="stToggle"] label { color: var(--text-main) !important; font-size: 0.9rem !important; }
 div[data-testid="stAppViewBlockContainer"] { padding-top: 1.5rem !important; }
+div[data-testid="stRadio"] label p { color: var(--text-main) !important; font-size: 0.92rem !important; }
+div[data-testid="stRadio"] [data-baseweb="radio"] { margin-bottom: 2px; }
+div[data-baseweb="select"] span, div[data-baseweb="select"] div { color: var(--text-main) !important; }
+li[role="option"] { background: var(--bg-card) !important; color: var(--text-main) !important; }
+li[role="option"]:hover { background: var(--bg-hover) !important; }
 </style>
 """
 

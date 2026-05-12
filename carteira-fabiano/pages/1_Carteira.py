@@ -329,14 +329,12 @@ with tab6:
         df_mes = df_detalhe[df_detalhe["mes"] == mes_sel_ts].copy()
 
         # KPIs do mês selecionado
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3 = st.columns(3)
         with m1:
-            st.metric("Igrejas no mês", f"{len(df_mes)}")
+            st.metric("Igrejas elegíveis", f"{df_mes['elegivel'].sum()}")
         with m2:
-            st.metric("Liquidada total", f"R$ {fmt_brl(df_mes['liquidada'].sum(), 0)}")
-        with m3:
             st.metric("Base comissão", f"R$ {fmt_brl(df_mes['liq_comissao'].sum(), 0)}")
-        with m4:
+        with m3:
             st.metric("Comissão 5%", f"R$ {fmt_brl(df_mes['comissao_5pct'].sum(), 0)}")
 
         st.divider()
