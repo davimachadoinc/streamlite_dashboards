@@ -219,6 +219,42 @@ def _ids_to_sql_list(ids: list[str]) -> str:
     return f"({quoted})"
 
 
+@st.cache_data(ttl=3600)
+def _build_entry_month_map() -> dict[str, str]:
+    """
+    {company_id: 'YYYY-MM-01'} para o mês de entrada de cada cliente.
+    Fonte: 'Data 1°Pag' da planilha (clientes até abr/2026); first_payment do BQ para os demais.
+    """
+    sheet_data = load_fabiano_sheet_data()
+    result: dict[str, str] = {}
+    for cid, meta in sheet_data.items():
+        raw = meta.get("entry", "").strip()
+        if not raw:
+            continue
+        try:
+            d = pd.to_datetime(raw, dayfirst=True, errors="coerce")
+            if pd.notna(d):
+                result[cid] = f"{d.year}-{d.month:02d}-01"
+        except Exception:
+            pass
+    return result
+
+
+def _entry_month_cte(entry_map: dict[str, str]) -> str:
+    """CTE client_entry injetado como UNNEST de STRUCTs no BigQuery."""
+    rows = ",\n    ".join(
+        f"STRUCT('{cid}' AS st_sincro_sac, DATE '{em}' AS entry_month)"
+        for cid, em in entry_map.items()
+    )
+    return (
+        "client_entry AS (\n"
+        "  SELECT * FROM UNNEST([\n"
+        f"    {rows}\n"
+        "  ])\n"
+        ")"
+    )
+
+
 # ─────────────────────────────────────────────
 # QUERIES — CARTEIRA FABIANO
 # ─────────────────────────────────────────────
@@ -235,6 +271,7 @@ def load_carteira_mensal() -> pd.DataFrame:
         return pd.DataFrame()
 
     id_list = _ids_to_sql_list(ids)
+    entry_cte = _entry_month_cte(_build_entry_month_map())
 
     query = f"""
     WITH ids_in_all AS (
@@ -258,13 +295,7 @@ def load_carteira_mensal() -> pd.DataFrame:
       WHERE st_sincro_sac IN {id_list}
         AND comp_st_conta_cont = '1.2.2'
     ),
-    client_entry AS (
-      -- mês de entrada de cada cliente = primeiro boleto 1.2.2 na carteira
-      SELECT st_sincro_sac,
-             DATE_TRUNC(MIN(CAST(dt_vencimento_recb AS DATE)), MONTH) AS entry_month
-      FROM boletos
-      GROUP BY 1
-    )
+    {entry_cte}
     SELECT
       DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH)              AS mes,
       COUNT(DISTINCT b.st_sincro_sac)                                     AS clientes,
@@ -304,7 +335,7 @@ def load_carteira_mensal() -> pd.DataFrame:
 def load_carteira_clientes() -> pd.DataFrame:
     """
     Detalhamento por cliente: nome, data de entrada, meses faturados, receita total.
-    Data de entrada = primeiro boleto 1.2.2. Nome = Superlógica ou planilha.
+    Data de entrada = Data 1°Pag da planilha (ou first_payment do BQ para novos clientes).
     """
     ids = load_fabiano_ids()
     if not ids:
@@ -312,6 +343,7 @@ def load_carteira_clientes() -> pd.DataFrame:
 
     sheet_meta = load_fabiano_sheet_data()
     id_list = _ids_to_sql_list(ids)
+    entry_cte = _entry_month_cte(_build_entry_month_map())
 
     query = f"""
     WITH ids_in_all AS (
@@ -335,16 +367,11 @@ def load_carteira_clientes() -> pd.DataFrame:
       WHERE st_sincro_sac IN {id_list}
         AND comp_st_conta_cont = '1.2.2'
     ),
-    client_entry AS (
-      SELECT st_sincro_sac,
-             DATE_TRUNC(MIN(CAST(dt_vencimento_recb AS DATE)), MONTH) AS entry_month
-      FROM boletos
-      GROUP BY 1
-    )
+    {entry_cte}
     SELECT
       a.st_sincro_sac,
       c.st_nome_sac                                                                AS nome_splgc,
-      MIN(DATE_TRUNC(CAST(a.dt_vencimento_recb AS DATE), MONTH))                   AS primeiro_boleto,
+      e.entry_month                                                                AS primeiro_boleto,
       COUNT(DISTINCT DATE_TRUNC(CAST(a.dt_vencimento_recb AS DATE), MONTH))        AS meses_faturados,
       SUM(a.comp_valor)                                                             AS receita_emitida,
       SUM(CASE WHEN a.fl_status_recb = '1' THEN a.comp_valor ELSE 0 END)           AS receita_liquidada,
@@ -358,7 +385,7 @@ def load_carteira_clientes() -> pd.DataFrame:
     JOIN client_entry e ON a.st_sincro_sac = e.st_sincro_sac
     LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
       ON a.st_sincro_sac = c.st_sincro_sac
-    GROUP BY 1, 2
+    GROUP BY 1, 2, 3
     """
     df = _bq_query(query)
     if df.empty:
@@ -392,6 +419,7 @@ def load_carteira_detalhe_mensal() -> pd.DataFrame:
 
     sheet_meta = load_fabiano_sheet_data()
     id_list = _ids_to_sql_list(ids)
+    entry_cte = _entry_month_cte(_build_entry_month_map())
 
     query = f"""
     WITH ids_in_all AS (
@@ -415,12 +443,7 @@ def load_carteira_detalhe_mensal() -> pd.DataFrame:
       WHERE st_sincro_sac IN {id_list}
         AND comp_st_conta_cont = '1.2.2'
     ),
-    client_entry AS (
-      SELECT st_sincro_sac,
-             DATE_TRUNC(MIN(CAST(dt_vencimento_recb AS DATE)), MONTH) AS entry_month
-      FROM boletos
-      GROUP BY 1
-    )
+    {entry_cte}
     SELECT
       b.st_sincro_sac                                                              AS id,
       c.st_nome_sac                                                                AS nome_splgc,
