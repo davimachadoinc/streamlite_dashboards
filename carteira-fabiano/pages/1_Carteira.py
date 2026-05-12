@@ -121,17 +121,17 @@ with tab1:
 
     fig = go.Figure()
     fig.add_bar(
-        x=df_plot["mes_fmt"], y=df_plot["receita_emitida"],
-        name="Emitida", marker_color=PALETTE[4], opacity=0.85,
-        hovertemplate="<b>%{x}</b><br>Emitida: R$ %{y:,.0f}<extra></extra>",
+        x=df_plot["mes_fmt"], y=df_plot["receita_emit_comissao"],
+        name="Emitida (elegível)", marker_color=PALETTE[4], opacity=0.85,
+        hovertemplate="<b>%{x}</b><br>Emitida elegível: R$ %{y:,.0f}<extra></extra>",
     )
     fig.add_bar(
-        x=df_plot["mes_fmt"], y=df_plot["receita_liquidada"],
-        name="Liquidada", marker_color=PALETTE[0], opacity=0.95,
-        hovertemplate="<b>%{x}</b><br>Liquidada: R$ %{y:,.0f}<extra></extra>",
+        x=df_plot["mes_fmt"], y=df_plot["receita_liq_comissao"],
+        name="Liquidada (elegível)", marker_color=PALETTE[0], opacity=0.95,
+        hovertemplate="<b>%{x}</b><br>Liquidada elegível: R$ %{y:,.0f}<extra></extra>",
     )
     fig.add_scatter(
-        x=df_plot["mes_fmt"], y=df_plot["pct_pago"],
+        x=df_plot["mes_fmt"], y=df_plot["pct_pago_comissao"],
         name="% Pago", mode="lines+markers",
         line=dict(color=PALETTE[8], width=2, dash="dot"),
         marker=dict(size=6),
@@ -151,19 +151,19 @@ with tab1:
         ),
     )
     st.plotly_chart(chart_layout(fig, height=440, legend_bottom=True), use_container_width=True)
-    st.caption("Barras sobrepostas: cinza = emitida, verde = liquidada. Linha pontilhada = % pago (eixo direito).")
+    st.caption("Apenas clientes elegíveis (primeiros 12 meses, excluindo entrada). Linha pontilhada = % pago (eixo direito).")
 
     # Sumário do período
-    total_emit = df["receita_emitida"].sum()
-    total_liq  = df["receita_liquidada"].sum()
+    total_emit = df["receita_emit_comissao"].sum()
+    total_liq  = df["receita_liq_comissao"].sum()
     pct_total  = (total_liq / total_emit * 100) if total_emit > 0 else 0
     s1, s2, s3 = st.columns(3)
     with s1:
-        st.metric("Total Emitido no Período", f"R$ {fmt_brl(total_emit, 0)}")
+        st.metric("Total Emitido Elegível", f"R$ {fmt_brl(total_emit, 0)}")
     with s2:
-        st.metric("Total Liquidado no Período", f"R$ {fmt_brl(total_liq, 0)}")
+        st.metric("Total Liquidado Elegível", f"R$ {fmt_brl(total_liq, 0)}")
     with s3:
-        st.metric("% Pago Médio", f"{pct_total:.1f}%")
+        st.metric("% Pago Médio (elegível)", f"{pct_total:.1f}%")
 
 # ─────────────────────────────────────────────
 # TAB 2 — Clientes Pagantes por Mês
@@ -223,10 +223,9 @@ with tab3:
 # ─────────────────────────────────────────────
 with tab4:
     display = df.sort_values("mes", ascending=False).copy()
-    display["mes_fmt"] = display["mes"].dt.strftime("%b/%Y").str.capitalize()
 
     display = display.rename(columns={
-        "mes_fmt":          "Mês",
+        "mes":              "Mês",
         "clientes":         "Clientes",
         "receita_emitida":  "Emitida (R$)",
         "receita_liquidada":"Liquidada (R$)",
@@ -240,6 +239,7 @@ with tab4:
 
     st.dataframe(
         display[["Mês", "Clientes", "Emitida (R$)", "Liquidada (R$)", "% Pago", "Comissão 5% (R$)"]],
+        column_config={"Mês": st.column_config.DateColumn("Mês", format="MMM/YYYY")},
         use_container_width=True,
         hide_index=True,
     )
@@ -315,10 +315,13 @@ with tab6:
             .sort_values("mes", ascending=False)
             .assign(label=lambda d: d["mes"].dt.strftime("%b/%Y").str.capitalize())
         )
+        meses_list = meses_disp["label"].tolist()
+        prev_month_label = (pd.Timestamp.today() - pd.DateOffset(months=1)).strftime("%b/%Y").capitalize()
+        default_idx = meses_list.index(prev_month_label) if prev_month_label in meses_list else 0
         mes_sel_label = st.selectbox(
             "Mês",
-            options=meses_disp["label"].tolist(),
-            index=0,
+            options=meses_list,
+            index=default_idx,
             key="detalhe_mes",
         )
         mes_sel_ts = meses_disp.loc[meses_disp["label"] == mes_sel_label, "mes"].iloc[0]

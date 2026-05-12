@@ -272,6 +272,11 @@ def load_carteira_mensal() -> pd.DataFrame:
       SUM(CASE WHEN b.fl_status_recb = '1' THEN b.comp_valor ELSE 0 END) AS receita_liquidada,
       -- elegível para comissão: após o mês de entrada e dentro dos primeiros 12 meses
       SUM(CASE
+        WHEN DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) > e.entry_month
+          AND DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) <= DATE_ADD(e.entry_month, INTERVAL 12 MONTH)
+        THEN b.comp_valor ELSE 0
+      END)                                                                AS receita_emit_comissao,
+      SUM(CASE
         WHEN b.fl_status_recb = '1'
           AND DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) > e.entry_month
           AND DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) <= DATE_ADD(e.entry_month, INTERVAL 12 MONTH)
@@ -288,6 +293,9 @@ def load_carteira_mensal() -> pd.DataFrame:
         df["comissao_5pct"] = (df["receita_liq_comissao"] * COMISSAO_CARTEIRA_PCT).round(2)
         df["pct_pago"] = (
             df["receita_liquidada"] / df["receita_emitida"].where(df["receita_emitida"] > 0) * 100
+        ).round(1)
+        df["pct_pago_comissao"] = (
+            df["receita_liq_comissao"] / df["receita_emit_comissao"].where(df["receita_emit_comissao"] > 0) * 100
         ).round(1)
     return df
 
