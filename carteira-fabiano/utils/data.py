@@ -244,7 +244,6 @@ def load_carteira_mensal() -> pd.DataFrame:
         AND comp_st_conta_cont = '1.2.2'
     ),
     boletos AS (
-      -- hist: apenas boletos ausentes na tabela all (evita duplicatas entre tabelas)
       SELECT h.id_recebimento_recb, h.st_sincro_sac, h.dt_vencimento_recb,
              h.comp_valor, h.fl_status_recb
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-hist` h
@@ -253,26 +252,40 @@ def load_carteira_mensal() -> pd.DataFrame:
         AND h.comp_st_conta_cont = '1.2.2'
         AND ia.id_recebimento_recb IS NULL
       UNION ALL
-      -- all: todas as linhas de comp (fonte única = sem duplicatas internas)
       SELECT id_recebimento_recb, st_sincro_sac, dt_vencimento_recb,
              comp_valor, fl_status_recb
       FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
       WHERE st_sincro_sac IN {id_list}
         AND comp_st_conta_cont = '1.2.2'
+    ),
+    client_entry AS (
+      -- mês de entrada de cada cliente = primeiro boleto 1.2.2 na carteira
+      SELECT st_sincro_sac,
+             DATE_TRUNC(MIN(CAST(dt_vencimento_recb AS DATE)), MONTH) AS entry_month
+      FROM boletos
+      GROUP BY 1
     )
     SELECT
-      DATE_TRUNC(CAST(dt_vencimento_recb AS DATE), MONTH)              AS mes,
-      COUNT(DISTINCT st_sincro_sac)                                     AS clientes,
-      SUM(comp_valor)                                                   AS receita_emitida,
-      SUM(CASE WHEN fl_status_recb = '1' THEN comp_valor ELSE 0 END)   AS receita_liquidada
-    FROM boletos
+      DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH)              AS mes,
+      COUNT(DISTINCT b.st_sincro_sac)                                     AS clientes,
+      SUM(b.comp_valor)                                                   AS receita_emitida,
+      SUM(CASE WHEN b.fl_status_recb = '1' THEN b.comp_valor ELSE 0 END) AS receita_liquidada,
+      -- elegível para comissão: após o mês de entrada e dentro dos primeiros 12 meses
+      SUM(CASE
+        WHEN b.fl_status_recb = '1'
+          AND DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) > e.entry_month
+          AND DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) <= DATE_ADD(e.entry_month, INTERVAL 12 MONTH)
+        THEN b.comp_valor ELSE 0
+      END)                                                                AS receita_liq_comissao
+    FROM boletos b
+    JOIN client_entry e ON b.st_sincro_sac = e.st_sincro_sac
     GROUP BY 1
     ORDER BY 1
     """
     df = _bq_query(query)
     if not df.empty:
         df["mes"] = pd.to_datetime(df["mes"])
-        df["comissao_5pct"] = (df["receita_liquidada"] * COMISSAO_CARTEIRA_PCT).round(2)
+        df["comissao_5pct"] = (df["receita_liq_comissao"] * COMISSAO_CARTEIRA_PCT).round(2)
         df["pct_pago"] = (
             df["receita_liquidada"] / df["receita_emitida"].where(df["receita_emitida"] > 0) * 100
         ).round(1)
