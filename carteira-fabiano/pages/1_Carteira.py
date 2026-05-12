@@ -345,6 +345,7 @@ with tab6:
         filtro_eleg = st.radio(
             "Exibir",
             ["Todas", "Elegíveis (comissão)", "Fora da janela"],
+            index=1,
             horizontal=True,
             key="detalhe_filtro",
         )
