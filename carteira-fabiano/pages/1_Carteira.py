@@ -19,7 +19,7 @@ from utils.data import (
     PALETTE, COMISSAO_CARTEIRA_PCT,
     chart_layout, mes_fmt_ordered, filter_months,
     last_val, prev_val, delta_str, fmt_brl, no_data,
-    load_carteira_mensal, load_carteira_clientes,
+    load_carteira_mensal, load_carteira_clientes, load_carteira_detalhe_mensal,
 )
 
 inject_css()
@@ -48,8 +48,9 @@ st.markdown(
 
 # ── Carga de dados ─────────────────────────────
 with st.spinner("Carregando dados..."):
-    df_raw   = load_carteira_mensal()
-    df_cli   = load_carteira_clientes()
+    df_raw    = load_carteira_mensal()
+    df_cli    = load_carteira_clientes()
+    df_detalhe = load_carteira_detalhe_mensal()
 
 df = filter_months(df_raw, n, "mes")
 
@@ -108,8 +109,8 @@ with k5:
 st.divider()
 
 # ── Tabs ──────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Receita", "👥 Clientes", "💰 Comissão 5%", "📋 Tabela Mensal", "🏢 Por Cliente"
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📊 Receita", "👥 Clientes", "💰 Comissão 5%", "📋 Tabela Mensal", "🏢 Por Cliente", "🔍 Detalhe por Mês",
 ])
 
 # ─────────────────────────────────────────────
@@ -296,6 +297,86 @@ with tab5:
         st.dataframe(
             disp[["Cliente", "ID", "1° Boleto", "Meses Fat.",
                   "Emitida Total (R$)", "Liquidada Total (R$)", "% Pago", "Comissão 5% (R$)"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+# ─────────────────────────────────────────────
+# TAB 6 — Detalhe por Mês
+# ─────────────────────────────────────────────
+with tab6:
+    if df_detalhe.empty:
+        no_data()
+    else:
+        # Filtro de mês
+        meses_disp = (
+            df_detalhe[["mes"]]
+            .drop_duplicates()
+            .sort_values("mes", ascending=False)
+            .assign(label=lambda d: d["mes"].dt.strftime("%b/%Y").str.capitalize())
+        )
+        mes_sel_label = st.selectbox(
+            "Mês",
+            options=meses_disp["label"].tolist(),
+            index=0,
+            key="detalhe_mes",
+        )
+        mes_sel_ts = meses_disp.loc[meses_disp["label"] == mes_sel_label, "mes"].iloc[0]
+
+        df_mes = df_detalhe[df_detalhe["mes"] == mes_sel_ts].copy()
+
+        # KPIs do mês selecionado
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("Igrejas no mês", f"{len(df_mes)}")
+        with m2:
+            st.metric("Liquidada total", f"R$ {fmt_brl(df_mes['liquidada'].sum(), 0)}")
+        with m3:
+            st.metric("Base comissão", f"R$ {fmt_brl(df_mes['liq_comissao'].sum(), 0)}")
+        with m4:
+            st.metric("Comissão 5%", f"R$ {fmt_brl(df_mes['comissao_5pct'].sum(), 0)}")
+
+        st.divider()
+
+        # Filtro de elegibilidade
+        filtro_eleg = st.radio(
+            "Exibir",
+            ["Todas", "Elegíveis (comissão)", "Fora da janela"],
+            horizontal=True,
+            key="detalhe_filtro",
+        )
+        if filtro_eleg == "Elegíveis (comissão)":
+            df_mes = df_mes[df_mes["elegivel"]]
+        elif filtro_eleg == "Fora da janela":
+            df_mes = df_mes[~df_mes["elegivel"]]
+
+        st.caption(f"{len(df_mes)} igrejas")
+
+        # Formata tabela
+        disp6 = df_mes.copy()
+        disp6["entry_month"] = disp6["entry_month"].dt.strftime("%m/%Y")
+        disp6["emitida"]     = disp6["emitida"].apply(lambda v: fmt_brl(v, 0))
+        disp6["liquidada"]   = disp6["liquidada"].apply(lambda v: fmt_brl(v, 0))
+        disp6["liq_comissao"]  = disp6["liq_comissao"].apply(lambda v: fmt_brl(v, 0))
+        disp6["comissao_5pct"] = disp6["comissao_5pct"].apply(lambda v: fmt_brl(v, 0))
+        disp6["pct_pago"]    = disp6["pct_pago"].apply(lambda v: f"{v:.1f}%")
+        disp6["elegivel"]    = disp6["elegivel"].map({True: "✅", False: "❌"})
+
+        disp6 = disp6.rename(columns={
+            "cliente":      "Igreja",
+            "id":           "ID",
+            "entry_month":  "Entrada",
+            "emitida":      "Emitida (R$)",
+            "liquidada":    "Liquidada (R$)",
+            "pct_pago":     "% Pago",
+            "elegivel":     "Comissão?",
+            "liq_comissao": "Base Comissão (R$)",
+            "comissao_5pct":"Comissão 5% (R$)",
+        })
+
+        st.dataframe(
+            disp6[["Igreja", "ID", "Entrada", "Emitida (R$)", "Liquidada (R$)",
+                   "% Pago", "Comissão?", "Base Comissão (R$)", "Comissão 5% (R$)"]],
             use_container_width=True,
             hide_index=True,
         )

@@ -357,3 +357,81 @@ def load_carteira_clientes() -> pd.DataFrame:
     ).round(1)
 
     return df.sort_values("receita_liquidada", ascending=False)
+
+
+@st.cache_data(ttl=3600)
+def load_carteira_detalhe_mensal() -> pd.DataFrame:
+    """
+    Receita 1.2.2 por cliente por mês, com flag de elegibilidade para comissão de carteira.
+    Retorna: id, cliente, entry_month, mes, emitida, liquidada, liq_comissao, comissao_5pct, pct_pago, elegivel.
+    """
+    ids = load_fabiano_ids()
+    if not ids:
+        return pd.DataFrame()
+
+    sheet_meta = load_fabiano_sheet_data()
+    id_list = _ids_to_sql_list(ids)
+
+    query = f"""
+    WITH ids_in_all AS (
+      SELECT DISTINCT id_recebimento_recb
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+      WHERE st_sincro_sac IN {id_list}
+        AND comp_st_conta_cont = '1.2.2'
+    ),
+    boletos AS (
+      SELECT h.id_recebimento_recb, h.st_sincro_sac, h.dt_vencimento_recb,
+             h.comp_valor, h.fl_status_recb
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-hist` h
+      LEFT JOIN ids_in_all ia ON h.id_recebimento_recb = ia.id_recebimento_recb
+      WHERE h.st_sincro_sac IN {id_list}
+        AND h.comp_st_conta_cont = '1.2.2'
+        AND ia.id_recebimento_recb IS NULL
+      UNION ALL
+      SELECT id_recebimento_recb, st_sincro_sac, dt_vencimento_recb,
+             comp_valor, fl_status_recb
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+      WHERE st_sincro_sac IN {id_list}
+        AND comp_st_conta_cont = '1.2.2'
+    ),
+    client_entry AS (
+      SELECT st_sincro_sac,
+             DATE_TRUNC(MIN(CAST(dt_vencimento_recb AS DATE)), MONTH) AS entry_month
+      FROM boletos
+      GROUP BY 1
+    )
+    SELECT
+      b.st_sincro_sac                                                              AS id,
+      c.st_nome_sac                                                                AS nome_splgc,
+      DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH)                       AS mes,
+      e.entry_month,
+      SUM(b.comp_valor)                                                            AS emitida,
+      SUM(CASE WHEN b.fl_status_recb = '1' THEN b.comp_valor ELSE 0 END)         AS liquidada,
+      SUM(CASE
+        WHEN b.fl_status_recb = '1'
+          AND DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) > e.entry_month
+          AND DATE_TRUNC(CAST(b.dt_vencimento_recb AS DATE), MONTH) <= DATE_ADD(e.entry_month, INTERVAL 12 MONTH)
+        THEN b.comp_valor ELSE 0
+      END)                                                                         AS liq_comissao
+    FROM boletos b
+    JOIN client_entry e ON b.st_sincro_sac = e.st_sincro_sac
+    LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+      ON b.st_sincro_sac = c.st_sincro_sac
+    GROUP BY 1, 2, 3, 4
+    ORDER BY 3 DESC, 5 DESC
+    """
+    df = _bq_query(query)
+    if df.empty:
+        return pd.DataFrame()
+
+    df["mes"]         = pd.to_datetime(df["mes"])
+    df["entry_month"] = pd.to_datetime(df["entry_month"])
+    df["id"]          = df["id"].astype(str)
+    df["nome_planilha"] = df["id"].map(lambda x: sheet_meta.get(x, {}).get("name", ""))
+    df["cliente"] = df["nome_splgc"].fillna("").replace("", None)
+    df["cliente"] = df["cliente"].fillna(df["nome_planilha"].replace("", None))
+    df["cliente"] = df["cliente"].fillna(df["id"])
+    df["comissao_5pct"] = (df["liq_comissao"] * COMISSAO_CARTEIRA_PCT).round(2)
+    df["pct_pago"]  = (df["liquidada"] / df["emitida"].where(df["emitida"] > 0) * 100).round(1)
+    df["elegivel"]  = df["liq_comissao"] > 0
+    return df
