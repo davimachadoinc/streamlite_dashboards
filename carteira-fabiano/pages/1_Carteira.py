@@ -35,6 +35,9 @@ with st.sidebar:
         key="period_carteira",
     )
     st.markdown("---")
+    if st.button("🔄 Limpar cache", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
     st.caption(
         "**Comissão 5%** = 5% sobre receita liquidada dos clientes vendidos por Fabiano "
         "nos últimos 12 meses (excluindo mês de entrada)."
