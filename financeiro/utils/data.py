@@ -367,15 +367,44 @@ def load_receita_modulos_mensais() -> pd.DataFrame:
 # ── PÁGINA 2: TRANSAÇÕES ─────────────────────
 # ─────────────────────────────────────────────
 
+@st.cache_data(ttl=86400)
+def load_sara_ids() -> tuple:
+    """Retorna tuple de tertiarygroup_ids de toda a denominação Sara Nossa Terra."""
+    query = """
+    SELECT tertiarygroup_id
+    FROM `inchurch-gcp.backend_bi.view_company_list`
+    WHERE subgroup_id = (
+      SELECT subgroup_id
+      FROM `inchurch-gcp.backend_bi.view_company_list`
+      WHERE tertiarygroup_id = 32187
+      LIMIT 1
+    )
+    """
+    df = _bq_query(query, "bigquery_tech")
+    if df.empty:
+        return (32187,)
+    return tuple(sorted(df["tertiarygroup_id"].astype(int).tolist()))
+
+
 @st.cache_data(ttl=3600)
-def load_transactions_por_metodo() -> pd.DataFrame:
+def load_transactions_por_metodo(exclude_ids: tuple = (), only_ids: tuple = ()) -> pd.DataFrame:
     """
     Soma de value por método de pagamento, canal, tipo (doacao/outros) e mês (últimos 15 meses).
     Status: active ou payed.
     Métodos excluídos: free (valor zero), external (valor zero), debit (volume residual).
     tipo = 'doacao' quando id da transação está em view_donation.transaction_ptr_id.
+    exclude_ids: exclui esses tertiarygroup_ids da agregação.
+    only_ids: restringe a esses tertiarygroup_ids.
     """
-    query = """
+    sara_filter = ""
+    if exclude_ids:
+        ids_str = ", ".join(str(i) for i in exclude_ids)
+        sara_filter = f"\n      AND t.tertiarygroup_id NOT IN ({ids_str})"
+    elif only_ids:
+        ids_str = ", ".join(str(i) for i in only_ids)
+        sara_filter = f"\n      AND t.tertiarygroup_id IN ({ids_str})"
+
+    query = f"""
     SELECT
       DATE_TRUNC(CAST(t.datetime AS DATE), MONTH)                       AS mes,
       t.method                                                           AS payment_method,
@@ -391,7 +420,7 @@ def load_transactions_por_metodo() -> pd.DataFrame:
       t.status IN ('active', 'payed')
       AND t.method NOT IN ('free', 'external', 'debit')
       AND CAST(t.datetime AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
-      AND CAST(t.datetime AS DATE) <= LAST_DAY(CURRENT_DATE())
+      AND CAST(t.datetime AS DATE) <= LAST_DAY(CURRENT_DATE()){sara_filter}
     GROUP BY 1, 2, 3, 4
     ORDER BY 1, 2
     """
@@ -405,7 +434,7 @@ def load_transactions_por_metodo() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def load_take_rate_snapshot_v2() -> dict:
+def load_take_rate_snapshot_v2(exclude_ids: tuple = (), only_ids: tuple = ()) -> dict:
     """
     Snapshot do take rate do mês corrente.
     A receita de intermediação é lançada manualmente, então o cálculo só
@@ -415,6 +444,7 @@ def load_take_rate_snapshot_v2() -> dict:
       de todos os dias do mês até dia_max (inclusive)
     - tpv = soma de value em view_transaction no mesmo intervalo
     - take_rate_pct = receita / tpv * 100
+    exclude_ids/only_ids: filtram o TPV (view_transaction) pelo tertiarygroup_id.
     """
     q_interm = """
     SELECT
@@ -435,12 +465,20 @@ def load_take_rate_snapshot_v2() -> dict:
     inicio_mes_str = dia_max.replace(day=1).strftime("%Y-%m-%d")
     receita_intermediacao = float(df_interm["receita_intermediacao"].iloc[0])
 
+    sara_filter = ""
+    if exclude_ids:
+        ids_str = ", ".join(str(i) for i in exclude_ids)
+        sara_filter = f"\n      AND tertiarygroup_id NOT IN ({ids_str})"
+    elif only_ids:
+        ids_str = ", ".join(str(i) for i in only_ids)
+        sara_filter = f"\n      AND tertiarygroup_id IN ({ids_str})"
+
     q_tpv = f"""
     SELECT SUM(value) AS tpv
     FROM `inchurch-gcp.backend_bi.view_transaction`
     WHERE status IN ('active', 'payed')
       AND method NOT IN ('free', 'external', 'debit')
-      AND CAST(datetime AS DATE) BETWEEN DATE '{inicio_mes_str}' AND DATE '{dia_max_str}'
+      AND CAST(datetime AS DATE) BETWEEN DATE '{inicio_mes_str}' AND DATE '{dia_max_str}'{sara_filter}
     """
     df_tpv = _bq_query(q_tpv, "bigquery_tech")
     tpv = (
@@ -460,7 +498,7 @@ def load_take_rate_snapshot_v2() -> dict:
 
 
 @st.cache_data(ttl=3600)
-def load_take_rate_historico_v2() -> pd.DataFrame:
+def load_take_rate_historico_v2(exclude_ids: tuple = (), only_ids: tuple = ()) -> pd.DataFrame:
     """
     Take rate histórico mensal.
     A receita de intermediação é lançada manualmente, então cada mês só
@@ -471,6 +509,7 @@ def load_take_rate_historico_v2() -> pd.DataFrame:
     - tpv = soma de value em view_transaction no mesmo intervalo (BQ_TECH)
     - take_rate_pct = receita / tpv * 100
     Cross-project: merge feito em Python (BQ_BI x BQ_TECH).
+    exclude_ids/only_ids: filtram o TPV (view_transaction) pelo tertiarygroup_id.
     """
     q_interm = """
     SELECT
@@ -496,6 +535,14 @@ def load_take_rate_historico_v2() -> pd.DataFrame:
     if df_interm.empty:
         return pd.DataFrame()
 
+    sara_filter = ""
+    if exclude_ids:
+        ids_str = ", ".join(str(i) for i in exclude_ids)
+        sara_filter = f"\n      AND tertiarygroup_id NOT IN ({ids_str})"
+    elif only_ids:
+        ids_str = ", ".join(str(i) for i in only_ids)
+        sara_filter = f"\n      AND tertiarygroup_id IN ({ids_str})"
+
     # TPV por mês: do dia 1 até o dia_max do mês (lado BQ_TECH)
     intervalos = [
         f"(CAST(datetime AS DATE) BETWEEN DATE '{m.strftime('%Y-%m-%d')}' AND DATE '{d}')"
@@ -509,7 +556,7 @@ def load_take_rate_historico_v2() -> pd.DataFrame:
     FROM `inchurch-gcp.backend_bi.view_transaction`
     WHERE status IN ('active', 'payed')
       AND method NOT IN ('free', 'external', 'debit')
-      AND ({where_intervalos})
+      AND ({where_intervalos}){sara_filter}
     GROUP BY 1
     """
     df_tpv = _bq_query(q_tpv, "bigquery_tech")
@@ -551,18 +598,29 @@ def load_intermediacao_mensal() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def load_transactions_clientes_por_mes() -> pd.DataFrame:
+def load_transactions_clientes_por_mes(exclude_ids: tuple = (), only_ids: tuple = ()) -> pd.DataFrame:
     """
-    Clientes únicos (tertiarygroup_id) transacionando por mês, canal e tipo (doacao/outros).
-    Agrupa sem quebrar por método para evitar dupla contagem no gráfico de clientes.
+    Uma linha por (mes, channel, tipo, tertiarygroup_id) único — sem pré-agregar clientes.
+    A agregação final é feita na página via nunique() para evitar dupla contagem de igrejas
+    que transacionaram em mais de um canal ou tipo no mesmo mês.
+    exclude_ids: exclui esses tertiarygroup_ids.
+    only_ids: restringe a esses tertiarygroup_ids.
     """
-    query = """
+    sara_filter = ""
+    if exclude_ids:
+        ids_str = ", ".join(str(i) for i in exclude_ids)
+        sara_filter = f"\n      AND t.tertiarygroup_id NOT IN ({ids_str})"
+    elif only_ids:
+        ids_str = ", ".join(str(i) for i in only_ids)
+        sara_filter = f"\n      AND t.tertiarygroup_id IN ({ids_str})"
+
+    query = f"""
     SELECT
       DATE_TRUNC(CAST(t.datetime AS DATE), MONTH)                       AS mes,
       t.payment_channel,
       CASE WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
            ELSE 'outros' END                                             AS tipo,
-      COUNT(DISTINCT t.tertiarygroup_id)                                 AS clientes
+      t.tertiarygroup_id
     FROM `inchurch-gcp.backend_bi.view_transaction` t
     LEFT JOIN `inchurch-gcp.backend_bi.view_donation` d
            ON d.transaction_ptr_id = t.id
@@ -570,8 +628,8 @@ def load_transactions_clientes_por_mes() -> pd.DataFrame:
       t.status IN ('active', 'payed')
       AND t.method NOT IN ('free', 'external', 'debit')
       AND CAST(t.datetime AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
-      AND CAST(t.datetime AS DATE) <= LAST_DAY(CURRENT_DATE())
-    GROUP BY 1, 2, 3
+      AND CAST(t.datetime AS DATE) <= LAST_DAY(CURRENT_DATE()){sara_filter}
+    GROUP BY 1, 2, 3, 4
     ORDER BY 1
     """
     df = _bq_query(query, "bigquery_tech")

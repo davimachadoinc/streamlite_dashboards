@@ -20,7 +20,7 @@ from utils.data import (
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
     load_transactions_por_metodo, load_transactions_clientes_por_mes,
-    load_intermediacao_mensal,
+    load_intermediacao_mensal, load_sara_ids,
     load_take_rate_snapshot_v2 as load_take_rate_snapshot,
     load_take_rate_historico_v2 as load_take_rate_historico,
 )
@@ -41,6 +41,16 @@ def method_color(m: str) -> str:
     idx = hash(m) % len(colors)
     return colors[idx]
 
+# ── Filtro Sara Nossa Terra (lido do session_state antes de carregar) ──
+sara_ids   = load_sara_ids()
+sara_opcao = st.session_state.get("filter_sara", "Todos")
+if sara_opcao == "Sem Sara Nossa Terra":
+    _excl, _only = sara_ids, ()
+elif sara_opcao == "Apenas Sara Nossa Terra":
+    _excl, _only = (), sara_ids
+else:
+    _excl, _only = (), ()
+
 # ── Header ────────────────────────────────────
 col_title, col_filter = st.columns([8, 2], vertical_alignment="bottom")
 with col_title:
@@ -50,11 +60,11 @@ with col_filter:
 
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando dados de transações..."):
-    df_raw        = load_transactions_por_metodo()
-    df_cli_raw    = load_transactions_clientes_por_mes()
+    df_raw        = load_transactions_por_metodo(exclude_ids=_excl, only_ids=_only)
+    df_cli_raw    = load_transactions_clientes_por_mes(exclude_ids=_excl, only_ids=_only)
     df_interm_raw = load_intermediacao_mensal()
-    snap_tr       = load_take_rate_snapshot()
-    df_tr_hist    = load_take_rate_historico()
+    snap_tr       = load_take_rate_snapshot(exclude_ids=_excl, only_ids=_only)
+    df_tr_hist    = load_take_rate_historico(exclude_ids=_excl, only_ids=_only)
 
 if df_raw.empty:
     no_data("Nenhum dado de transação encontrado.")
@@ -76,6 +86,13 @@ with st.sidebar:
         default=tipos,
         format_func=lambda t: TIPO_LABELS.get(t, t),
         key="filter_tipos",
+    )
+    st.markdown("### ⛪ Sara Nossa Terra")
+    st.radio(
+        "Sara Nossa Terra não possui take rate.",
+        options=["Todos", "Sem Sara Nossa Terra", "Apenas Sara Nossa Terra"],
+        index=0,
+        key="filter_sara",
     )
 
 if not selected_channels:
@@ -123,7 +140,7 @@ methods = sorted(df_agg["payment_method"].unique().tolist())
 # Clientes por mês (sem dupla contagem por método)
 df_cli_mes = (
     df_cli.groupby("mes", as_index=False)
-    .agg(clientes=("clientes", "sum"))
+    .agg(clientes=("tertiarygroup_id", "nunique"))
     .sort_values("mes")
 )
 
@@ -297,7 +314,7 @@ else:
         st.subheader("Clientes por Tipo de Transação")
         df_cli_tipo = (
             df_cli.groupby(["mes", "tipo"], as_index=False)
-            .agg(clientes=("clientes", "sum"))
+            .agg(clientes=("tertiarygroup_id", "nunique"))
         )
         TIPO_COLORS = {"doacao": PALETTE[0], "outros": PALETTE[3]}
         if df_cli_tipo.empty:
