@@ -667,6 +667,7 @@ def load_desativacoes_mensais() -> pd.DataFrame:
         AND CAST(dt_fim_mens AS DATE) <= LAST_DAY(CURRENT_DATE())
         AND st_descricao_prd NOT LIKE '%Setup%'
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND valor_total > 0
       UNION ALL
       -- Clientes com dt_desativacao_sac preenchida mas sem dt_fim_mens nos produtos
       SELECT
@@ -684,6 +685,7 @@ def load_desativacoes_mensais() -> pd.DataFrame:
         AND CAST(c.dt_desativacao_sac AS DATE) <= LAST_DAY(CURRENT_DATE())
         AND m.st_descricao_prd NOT LIKE '%Setup%'
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND m.valor_total > 0
       QUALIFY ROW_NUMBER() OVER (
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
@@ -821,6 +823,7 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
         AND st_descricao_prd NOT LIKE '%Setup%'
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND {_EXCL_MODULOS.format(col="st_descricao_prd")}
+        AND valor_total > 0
       UNION ALL
       -- Clientes com dt_desativacao_sac preenchida mas sem dt_fim_mens nos produtos
       SELECT
@@ -839,6 +842,7 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
         AND m.st_descricao_prd NOT LIKE '%Setup%'
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND {_EXCL_MODULOS.format(col="m.st_descricao_prd")}
+        AND m.valor_total > 0
       QUALIFY ROW_NUMBER() OVER (
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
@@ -896,6 +900,7 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
         AND CAST(m.dt_fim_mens AS DATE) <= LAST_DAY(CURRENT_DATE())
         AND m.st_descricao_prd NOT LIKE '%Setup%'
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND m.valor_total > 0
       UNION ALL
       -- Clientes com dt_desativacao_sac preenchida mas sem dt_fim_mens nos produtos
       SELECT
@@ -913,6 +918,7 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
         AND CAST(c.dt_desativacao_sac AS DATE) <= LAST_DAY(CURRENT_DATE())
         AND m.st_descricao_prd NOT LIKE '%Setup%'
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND m.valor_total > 0
       QUALIFY ROW_NUMBER() OVER (
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC

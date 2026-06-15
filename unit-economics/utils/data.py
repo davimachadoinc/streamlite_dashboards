@@ -488,6 +488,7 @@ def load_mrr_waterfall() -> pd.DataFrame:
         AND CAST(dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
         AND st_descricao_prd NOT LIKE '%Setup%'
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND valor_total > 0
       UNION ALL
       SELECT
         m.st_sincro_sac, m.st_descricao_prd,
@@ -502,6 +503,7 @@ def load_mrr_waterfall() -> pd.DataFrame:
         AND CAST(c.dt_desativacao_sac AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
         AND m.st_descricao_prd NOT LIKE '%Setup%'
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND m.valor_total > 0
       QUALIFY ROW_NUMBER() OVER (PARTITION BY m.st_sincro_sac, m.st_descricao_prd ORDER BY m.dt_inicio_mens DESC) = 1
     ),
     renovacoes_churn AS (
@@ -780,6 +782,7 @@ def load_churn_por_plano() -> pd.DataFrame:
         AND st_descricao_prd NOT LIKE '%Setup%'
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND {_EXCL_MODULOS.format(col="st_descricao_prd")}
+        AND valor_total > 0
       UNION ALL
       SELECT
         m.st_sincro_sac, m.st_descricao_prd,
@@ -795,6 +798,7 @@ def load_churn_por_plano() -> pd.DataFrame:
         AND m.st_descricao_prd NOT LIKE '%Setup%'
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND {_EXCL_MODULOS.format(col="m.st_descricao_prd")}
+        AND m.valor_total > 0
       QUALIFY ROW_NUMBER() OVER (PARTITION BY m.st_sincro_sac, m.st_descricao_prd ORDER BY m.dt_inicio_mens DESC) = 1
     ),
     renovacoes AS (
