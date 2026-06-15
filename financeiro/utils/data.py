@@ -76,6 +76,18 @@ _EXCL_MODULOS = """
     AND NOT ({col} LIKE '%[STARTER]%' AND {col} LIKE '%Módulo%')
 """
 
+# Filtro para excluir itens que não são mensalidade 1.2.2:
+# descontos, abonos, intermediação, acordos e reajustes anuais.
+# A vw-splgc-tabela_mrr_validos não expõe comp_st_conta_cont, então filtramos por nome.
+_EXCL_NAO_MENSALIDADE = """
+    {col} NOT LIKE '%Desconto%'
+    AND {col} NOT LIKE '%Abono%'
+    AND {col} NOT LIKE '%Intermediação%'
+    AND {col} NOT LIKE 'Especialista%'
+    AND {col} NOT LIKE 'Acordo%'
+    AND {col} NOT LIKE 'Reajuste%'
+"""
+
 # CASE SQL para classificar plano base (usar substituindo {col})
 _PLAN_CASE = """
     CASE
@@ -668,6 +680,12 @@ def load_desativacoes_mensais() -> pd.DataFrame:
         AND st_descricao_prd NOT LIKE '%Setup%'
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND valor_total > 0
+        AND st_descricao_prd NOT LIKE '%Desconto%'
+        AND st_descricao_prd NOT LIKE '%Abono%'
+        AND st_descricao_prd NOT LIKE '%Intermediação%'
+        AND st_descricao_prd NOT LIKE 'Especialista%'
+        AND st_descricao_prd NOT LIKE 'Acordo%'
+        AND st_descricao_prd NOT LIKE 'Reajuste%'
       UNION ALL
       -- Clientes com dt_desativacao_sac preenchida mas sem dt_fim_mens nos produtos
       SELECT
@@ -686,6 +704,12 @@ def load_desativacoes_mensais() -> pd.DataFrame:
         AND m.st_descricao_prd NOT LIKE '%Setup%'
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND m.valor_total > 0
+        AND m.st_descricao_prd NOT LIKE '%Desconto%'
+        AND m.st_descricao_prd NOT LIKE '%Abono%'
+        AND m.st_descricao_prd NOT LIKE '%Intermediação%'
+        AND m.st_descricao_prd NOT LIKE 'Especialista%'
+        AND m.st_descricao_prd NOT LIKE 'Acordo%'
+        AND m.st_descricao_prd NOT LIKE 'Reajuste%'
       QUALIFY ROW_NUMBER() OVER (
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
@@ -824,6 +848,7 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND {_EXCL_MODULOS.format(col="st_descricao_prd")}
         AND valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="st_descricao_prd")}
       UNION ALL
       -- Clientes com dt_desativacao_sac preenchida mas sem dt_fim_mens nos produtos
       SELECT
@@ -843,6 +868,7 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND {_EXCL_MODULOS.format(col="m.st_descricao_prd")}
         AND m.valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="m.st_descricao_prd")}
       QUALIFY ROW_NUMBER() OVER (
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
@@ -901,6 +927,7 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
         AND m.st_descricao_prd NOT LIKE '%Setup%'
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND m.valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="m.st_descricao_prd")}
       UNION ALL
       -- Clientes com dt_desativacao_sac preenchida mas sem dt_fim_mens nos produtos
       SELECT
@@ -919,6 +946,7 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
         AND m.st_descricao_prd NOT LIKE '%Setup%'
         AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND m.valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="m.st_descricao_prd")}
       QUALIFY ROW_NUMBER() OVER (
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
