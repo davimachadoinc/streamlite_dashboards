@@ -419,8 +419,11 @@ def load_mrr_waterfall() -> pd.DataFrame:
         ON  mrr.st_sincro_sac    = rm.st_sincro_sac
         AND mrr.st_descricao_prd = rm.st_descricao_prd
         AND DATE_TRUNC(CAST(mrr.dt_fim_mens AS DATE), MONTH) = rm.mes_old
-      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` cli
-        ON mrr.st_sincro_sac = cli.st_sincro_sac
+      LEFT JOIN (
+        SELECT st_sincro_sac, MAX(dt_desativacao_sac) AS dt_desativacao_sac
+        FROM `business-intelligence-467516.Splgc.splgc-clientes-inchurch`
+        GROUP BY st_sincro_sac
+      ) cli ON mrr.st_sincro_sac = cli.st_sincro_sac
       WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
         AND (
           mrr.dt_fim_mens IS NULL
@@ -500,8 +503,11 @@ def load_mrr_waterfall() -> pd.DataFrame:
         DATE_TRUNC(COALESCE(CAST(c.dt_desativacao_sac AS DATE), CAST(m.dt_fim_mens AS DATE)), MONTH) AS mes,
         m.valor_total
       FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
-      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
-        ON m.st_sincro_sac = c.st_sincro_sac
+      LEFT JOIN (
+        SELECT st_sincro_sac, MAX(dt_desativacao_sac) AS dt_desativacao_sac
+        FROM `business-intelligence-467516.Splgc.splgc-clientes-inchurch`
+        GROUP BY st_sincro_sac
+      ) c ON m.st_sincro_sac = c.st_sincro_sac
       WHERE m.dt_fim_mens IS NOT NULL
         AND COALESCE(CAST(c.dt_desativacao_sac AS DATE), CAST(m.dt_fim_mens AS DATE)) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
         AND m.st_descricao_prd NOT LIKE '%Setup%'
@@ -797,8 +803,11 @@ def load_churn_por_plano() -> pd.DataFrame:
         DATE_TRUNC(COALESCE(CAST(c.dt_desativacao_sac AS DATE), CAST(m.dt_fim_mens AS DATE)), MONTH) AS mes,
         m.valor_total
       FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
-      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
-        ON m.st_sincro_sac = c.st_sincro_sac
+      LEFT JOIN (
+        SELECT st_sincro_sac, MAX(dt_desativacao_sac) AS dt_desativacao_sac
+        FROM `business-intelligence-467516.Splgc.splgc-clientes-inchurch`
+        GROUP BY st_sincro_sac
+      ) c ON m.st_sincro_sac = c.st_sincro_sac
       WHERE m.dt_fim_mens IS NOT NULL
         AND COALESCE(CAST(c.dt_desativacao_sac AS DATE), CAST(m.dt_fim_mens AS DATE)) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
         AND m.st_descricao_prd NOT LIKE '%Setup%'
