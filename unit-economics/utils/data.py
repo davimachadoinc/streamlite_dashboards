@@ -420,7 +420,7 @@ def load_mrr_waterfall() -> pd.DataFrame:
       WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
         AND (
           mrr.dt_fim_mens IS NULL
-          OR CAST(mrr.dt_fim_mens AS DATE) >= cal.mes
+          OR COALESCE(CAST(mrr.dt_desativacao_sac AS DATE), CAST(mrr.dt_fim_mens AS DATE)) >= cal.mes
           -- Renovação: mantém contrato antigo no mrr_inicio do mês seguinte
           OR (rm.st_sincro_sac IS NOT NULL
               AND CAST(mrr.dt_fim_mens AS DATE) = DATE_SUB(cal.mes, INTERVAL 1 DAY))
@@ -492,12 +492,12 @@ def load_mrr_waterfall() -> pd.DataFrame:
     desativados_raw AS (
       SELECT
         st_sincro_sac, st_descricao_prd,
-        CAST(dt_fim_mens AS DATE)                            AS dt_fim,
-        DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH)         AS mes,
+        COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE))                    AS dt_fim,
+        DATE_TRUNC(COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE)), MONTH) AS mes,
         valor_total
       FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
       WHERE dt_fim_mens IS NOT NULL
-        AND CAST(dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
+        AND COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE)) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
         AND st_descricao_prd NOT LIKE '%Setup%'
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND valor_total > 0
@@ -787,12 +787,12 @@ def load_churn_por_plano() -> pd.DataFrame:
     WITH desativados AS (
       SELECT
         st_sincro_sac, st_descricao_prd,
-        CAST(dt_fim_mens AS DATE)                            AS dt_fim,
-        DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH)         AS mes,
+        COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE))                    AS dt_fim,
+        DATE_TRUNC(COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE)), MONTH) AS mes,
         valor_total
       FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
       WHERE dt_fim_mens IS NOT NULL
-        AND CAST(dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
+        AND COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE)) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
         AND st_descricao_prd NOT LIKE '%Setup%'
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
         AND {_EXCL_MODULOS.format(col="st_descricao_prd")}
