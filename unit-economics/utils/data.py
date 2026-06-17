@@ -406,6 +406,8 @@ def load_mrr_waterfall() -> pd.DataFrame:
     ),
     -- MRR ativo no início de cada mês. Inclui contratos de renovação que encerraram
     -- no último dia do mês anterior (para manter continuidade do waterfall).
+    -- Quando dt_desativacao_sac > dt_fim_mens (churn financeiro), usa dt_desativacao_sac
+    -- como critério de saída da base, mantendo consistência com a data de churn.
     mrr_inicio_mes AS (
       SELECT
         cal.mes,
@@ -417,10 +419,12 @@ def load_mrr_waterfall() -> pd.DataFrame:
         ON  mrr.st_sincro_sac    = rm.st_sincro_sac
         AND mrr.st_descricao_prd = rm.st_descricao_prd
         AND DATE_TRUNC(CAST(mrr.dt_fim_mens AS DATE), MONTH) = rm.mes_old
+      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` cli
+        ON mrr.st_sincro_sac = cli.st_sincro_sac
       WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
         AND (
           mrr.dt_fim_mens IS NULL
-          OR CAST(mrr.dt_fim_mens AS DATE) >= cal.mes
+          OR CAST(COALESCE(cli.dt_desativacao_sac, mrr.dt_fim_mens) AS DATE) >= cal.mes
           -- Renovação: mantém contrato antigo no mrr_inicio do mês seguinte
           OR (rm.st_sincro_sac IS NOT NULL
               AND CAST(mrr.dt_fim_mens AS DATE) = DATE_SUB(cal.mes, INTERVAL 1 DAY))
@@ -491,21 +495,23 @@ def load_mrr_waterfall() -> pd.DataFrame:
     -- Churn (com exclusão de renovações — mesmo padrão do dashboard de desativações)
     desativados_raw AS (
       SELECT
-        st_sincro_sac, st_descricao_prd,
-        CAST(dt_fim_mens AS DATE)                            AS dt_fim,
-        DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH)         AS mes,
-        valor_total
-      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
-      WHERE dt_fim_mens IS NOT NULL
-        AND CAST(dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
-        AND st_descricao_prd NOT LIKE '%Setup%'
-        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
-        AND valor_total > 0
-        AND {_EXCL_NAO_MENSALIDADE.format(col="st_descricao_prd")}
+        m.st_sincro_sac, m.st_descricao_prd,
+        CAST(COALESCE(c.dt_desativacao_sac, m.dt_fim_mens) AS DATE)                    AS dt_fim,
+        DATE_TRUNC(CAST(COALESCE(c.dt_desativacao_sac, m.dt_fim_mens) AS DATE), MONTH) AS mes,
+        m.valor_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
+      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+        ON m.st_sincro_sac = c.st_sincro_sac
+      WHERE m.dt_fim_mens IS NOT NULL
+        AND CAST(COALESCE(c.dt_desativacao_sac, m.dt_fim_mens) AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
+        AND m.st_descricao_prd NOT LIKE '%Setup%'
+        AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND m.valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="m.st_descricao_prd")}
       UNION ALL
       SELECT
         m.st_sincro_sac, m.st_descricao_prd,
-        CAST(c.dt_desativacao_sac AS DATE)                   AS dt_fim,
+        CAST(c.dt_desativacao_sac AS DATE)                    AS dt_fim,
         DATE_TRUNC(CAST(c.dt_desativacao_sac AS DATE), MONTH) AS mes,
         m.valor_total
       FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
@@ -786,22 +792,24 @@ def load_churn_por_plano() -> pd.DataFrame:
     query = f"""
     WITH desativados AS (
       SELECT
-        st_sincro_sac, st_descricao_prd,
-        CAST(dt_fim_mens AS DATE)                            AS dt_fim,
-        DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH)         AS mes,
-        valor_total
-      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
-      WHERE dt_fim_mens IS NOT NULL
-        AND CAST(dt_fim_mens AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
-        AND st_descricao_prd NOT LIKE '%Setup%'
-        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
-        AND {_EXCL_MODULOS.format(col="st_descricao_prd")}
-        AND valor_total > 0
-        AND {_EXCL_NAO_MENSALIDADE.format(col="st_descricao_prd")}
+        m.st_sincro_sac, m.st_descricao_prd,
+        CAST(COALESCE(c.dt_desativacao_sac, m.dt_fim_mens) AS DATE)                    AS dt_fim,
+        DATE_TRUNC(CAST(COALESCE(c.dt_desativacao_sac, m.dt_fim_mens) AS DATE), MONTH) AS mes,
+        m.valor_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
+      LEFT JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+        ON m.st_sincro_sac = c.st_sincro_sac
+      WHERE m.dt_fim_mens IS NOT NULL
+        AND CAST(COALESCE(c.dt_desativacao_sac, m.dt_fim_mens) AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
+        AND m.st_descricao_prd NOT LIKE '%Setup%'
+        AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND {_EXCL_MODULOS.format(col="m.st_descricao_prd")}
+        AND m.valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="m.st_descricao_prd")}
       UNION ALL
       SELECT
         m.st_sincro_sac, m.st_descricao_prd,
-        CAST(c.dt_desativacao_sac AS DATE)                   AS dt_fim,
+        CAST(c.dt_desativacao_sac AS DATE)                    AS dt_fim,
         DATE_TRUNC(CAST(c.dt_desativacao_sac AS DATE), MONTH) AS mes,
         m.valor_total
       FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
