@@ -102,6 +102,21 @@ _EXCL_NAO_MENSALIDADE = """
     AND {col} NOT LIKE 'Reajuste%'
 """
 
+# dt_desativacao_sac só substitui dt_fim_mens na ÚLTIMA geração de contrato do
+# cliente (MAX(dt_fim_mens) por st_sincro_sac). Sem isso, o churn financeiro do
+# cliente é aplicado retroativamente a gerações de contrato já migradas/renovadas,
+# empurrando-as para o mesmo mês da baixa real (caso id_sacado 171 / jul-2026).
+_DT_FIM_EFETIVO = """
+    CASE
+      WHEN {fim_col} = {ultima_col} THEN COALESCE({desativ_col}, {fim_col})
+      ELSE {fim_col}
+    END
+"""
+
+# Família do produto: remove a faixa numérica de membros/igrejas do final do
+# nome para casar renovações mesmo com upsell/downsell de tier (caso id_sacado 3846).
+_FAMILIA_PRODUTO = r"REGEXP_REPLACE({col}, r'\s+\d+\s*-.*$', '')"
+
 _PLAN_CASE = """
     CASE
       WHEN {col} LIKE '%[PRO]%'               THEN 'pro'
@@ -352,6 +367,19 @@ def load_mrr_waterfall() -> pd.DataFrame:
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
       GROUP BY 1
     ),
+    -- Última geração de contrato de cada cliente (MAX dt_fim_mens). Usado para que
+    -- dt_desativacao_sac só sobrescreva dt_fim_mens da geração vigente, não de
+    -- gerações já migradas/renovadas (ver [[churn-desativacoes]]).
+    mrr_ultima_geracao AS (
+      SELECT
+        st_sincro_sac,
+        MAX(CAST(dt_fim_mens AS DATE)) AS ultima_dt_fim_cliente
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NOT NULL
+        AND st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+      GROUP BY 1
+    ),
     -- ── Renovações: pares (contrato antigo encerrando no último dia do mês X,
     --    mesmo cliente+produto reinicia no mês X+1). Usados para manter
     --    continuidade do mrr_inicio e capturar apenas o delta no expansion. ──────
@@ -384,24 +412,34 @@ def load_mrr_waterfall() -> pd.DataFrame:
       GROUP BY 1, 2, 3
     ),
     -- Marcador de linhas do MRR que fazem parte de uma renovação (cliente+produto)
-    ren_markers AS (
-      SELECT DISTINCT o.st_sincro_sac, o.st_descricao_prd, o.mes_old
+    -- Pares (old, new) da mesma família, com restrição de cardinalidade 1:1 — evita
+    -- casar em massa clientes com vários produtos simultâneos da mesma família
+    -- (ex: denominação com várias igrejas filhas, cada uma com sua faixa de membros).
+    ren_pairs AS (
+      SELECT
+        o.st_sincro_sac,
+        o.st_descricao_prd AS old_desc,
+        o.mes_old,
+        o.old_total,
+        n.new_total
       FROM ren_old_agg o
       INNER JOIN ren_new_agg n
-        ON  o.st_sincro_sac    = n.st_sincro_sac
-        AND o.st_descricao_prd = n.st_descricao_prd
+        ON  o.st_sincro_sac = n.st_sincro_sac
+        AND {_FAMILIA_PRODUTO.format(col="o.st_descricao_prd")} = {_FAMILIA_PRODUTO.format(col="n.st_descricao_prd")}
         AND n.mes_new = DATE_ADD(o.mes_old, INTERVAL 1 MONTH)
+      QUALIFY COUNT(DISTINCT o.st_descricao_prd) OVER (PARTITION BY o.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="o.st_descricao_prd")}, o.mes_old) = 1
+           AND COUNT(DISTINCT n.st_descricao_prd) OVER (PARTITION BY o.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="o.st_descricao_prd")}, o.mes_old) = 1
+    ),
+    ren_markers AS (
+      SELECT DISTINCT st_sincro_sac, old_desc AS st_descricao_prd, mes_old
+      FROM ren_pairs
     ),
     -- Delta líquido de valor por mês para renovações (novo_total - antigo_total)
     renovacoes_delta_mes AS (
       SELECT
-        DATE_ADD(o.mes_old, INTERVAL 1 MONTH) AS mes,
-        SUM(n.new_total - o.old_total)         AS ren_delta
-      FROM ren_old_agg o
-      INNER JOIN ren_new_agg n
-        ON  o.st_sincro_sac    = n.st_sincro_sac
-        AND o.st_descricao_prd = n.st_descricao_prd
-        AND n.mes_new = DATE_ADD(o.mes_old, INTERVAL 1 MONTH)
+        DATE_ADD(mes_old, INTERVAL 1 MONTH) AS mes,
+        SUM(new_total - old_total)           AS ren_delta
+      FROM ren_pairs
       GROUP BY 1
     ),
     -- MRR ativo no início de cada mês. Inclui contratos de renovação que encerraram
@@ -413,6 +451,8 @@ def load_mrr_waterfall() -> pd.DataFrame:
         COUNT(DISTINCT mrr.st_sincro_sac) AS clientes_inicio
       FROM meses cal
       CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
+      LEFT JOIN mrr_ultima_geracao ug
+        ON mrr.st_sincro_sac = ug.st_sincro_sac
       LEFT JOIN ren_markers rm
         ON  mrr.st_sincro_sac    = rm.st_sincro_sac
         AND mrr.st_descricao_prd = rm.st_descricao_prd
@@ -420,7 +460,7 @@ def load_mrr_waterfall() -> pd.DataFrame:
       WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
         AND (
           mrr.dt_fim_mens IS NULL
-          OR COALESCE(CAST(mrr.dt_desativacao_sac AS DATE), CAST(mrr.dt_fim_mens AS DATE)) >= cal.mes
+          OR {_DT_FIM_EFETIVO.format(fim_col="CAST(mrr.dt_fim_mens AS DATE)", ultima_col="ug.ultima_dt_fim_cliente", desativ_col="CAST(mrr.dt_desativacao_sac AS DATE)")} >= cal.mes
           -- Renovação: mantém contrato antigo no mrr_inicio do mês seguinte
           OR (rm.st_sincro_sac IS NOT NULL
               AND CAST(mrr.dt_fim_mens AS DATE) = DATE_SUB(cal.mes, INTERVAL 1 DAY))
@@ -464,10 +504,12 @@ def load_mrr_waterfall() -> pd.DataFrame:
       SELECT DISTINCT e.st_sincro_sac, e.st_descricao_prd, e.mes
       FROM expansao_raw e
       INNER JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` prev
-        ON e.st_sincro_sac    = prev.st_sincro_sac
-        AND e.st_descricao_prd = prev.st_descricao_prd
+        ON e.st_sincro_sac = prev.st_sincro_sac
+        AND {_FAMILIA_PRODUTO.format(col="e.st_descricao_prd")} = {_FAMILIA_PRODUTO.format(col="prev.st_descricao_prd")}
         AND CAST(prev.dt_fim_mens AS DATE) = LAST_DAY(CAST(prev.dt_fim_mens AS DATE))
         AND DATE_TRUNC(CAST(prev.dt_fim_mens AS DATE), MONTH) = DATE_SUB(e.mes, INTERVAL 1 MONTH)
+      QUALIFY COUNT(DISTINCT e.st_descricao_prd) OVER (PARTITION BY e.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="e.st_descricao_prd")}, e.mes) = 1
+           AND COUNT(DISTINCT prev.st_descricao_prd) OVER (PARTITION BY e.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="e.st_descricao_prd")}, e.mes) = 1
     ),
     expansion_mes AS (
       -- Expansão regular (sem renovações) + delta líquido de renovações
@@ -489,19 +531,22 @@ def load_mrr_waterfall() -> pd.DataFrame:
       FULL OUTER JOIN renovacoes_delta_mes ren ON reg.mes = ren.mes
     ),
     -- Churn (com exclusão de renovações — mesmo padrão do dashboard de desativações)
+    -- dt_desativacao_sac só substitui dt_fim_mens na última geração de contrato do
+    -- cliente (mrr_ultima_geracao) — ver [[churn-desativacoes]].
     desativados_raw AS (
       SELECT
-        st_sincro_sac, st_descricao_prd,
-        COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE))                    AS dt_fim,
-        DATE_TRUNC(COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE)), MONTH) AS mes,
-        valor_total
-      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
-      WHERE dt_fim_mens IS NOT NULL
-        AND COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE)) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
-        AND st_descricao_prd NOT LIKE '%Setup%'
-        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
-        AND valor_total > 0
-        AND {_EXCL_NAO_MENSALIDADE.format(col="st_descricao_prd")}
+        m.st_sincro_sac, m.st_descricao_prd,
+        {_DT_FIM_EFETIVO.format(fim_col="CAST(m.dt_fim_mens AS DATE)", ultima_col="ug.ultima_dt_fim_cliente", desativ_col="CAST(m.dt_desativacao_sac AS DATE)")} AS dt_fim,
+        DATE_TRUNC({_DT_FIM_EFETIVO.format(fim_col="CAST(m.dt_fim_mens AS DATE)", ultima_col="ug.ultima_dt_fim_cliente", desativ_col="CAST(m.dt_desativacao_sac AS DATE)")}, MONTH) AS mes,
+        m.valor_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
+      LEFT JOIN mrr_ultima_geracao ug ON m.st_sincro_sac = ug.st_sincro_sac
+      WHERE m.dt_fim_mens IS NOT NULL
+        AND {_DT_FIM_EFETIVO.format(fim_col="CAST(m.dt_fim_mens AS DATE)", ultima_col="ug.ultima_dt_fim_cliente", desativ_col="CAST(m.dt_desativacao_sac AS DATE)")} >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
+        AND m.st_descricao_prd NOT LIKE '%Setup%'
+        AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND m.valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="m.st_descricao_prd")}
       UNION ALL
       SELECT
         m.st_sincro_sac, m.st_descricao_prd,
@@ -524,10 +569,12 @@ def load_mrr_waterfall() -> pd.DataFrame:
       SELECT DISTINCT d.st_sincro_sac, d.st_descricao_prd, d.mes
       FROM desativados_raw d
       INNER JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` r
-        ON d.st_sincro_sac    = r.st_sincro_sac
-        AND d.st_descricao_prd = r.st_descricao_prd
+        ON d.st_sincro_sac = r.st_sincro_sac
+        AND {_FAMILIA_PRODUTO.format(col="d.st_descricao_prd")} = {_FAMILIA_PRODUTO.format(col="r.st_descricao_prd")}
         AND DATE_TRUNC(CAST(r.dt_inicio_mens AS DATE), MONTH) = DATE_ADD(d.mes, INTERVAL 1 MONTH)
       WHERE d.dt_fim = LAST_DAY(d.dt_fim) AND r.dt_inicio_mens IS NOT NULL
+      QUALIFY COUNT(DISTINCT d.st_descricao_prd) OVER (PARTITION BY d.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="d.st_descricao_prd")}, d.mes) = 1
+           AND COUNT(DISTINCT r.st_descricao_prd) OVER (PARTITION BY d.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="d.st_descricao_prd")}, d.mes) = 1
     ),
     churn_mes AS (
       SELECT
@@ -782,22 +829,36 @@ def load_expansion_detalhado() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def load_churn_por_plano() -> pd.DataFrame:
-    """Desativações de plano base por mês — MRR perdido e clientes (últimos 18 meses)."""
+    """
+    Desativações de plano base por mês — MRR perdido e clientes (últimos 18 meses).
+    dt_desativacao_sac só substitui dt_fim_mens na última geração de contrato do
+    cliente; exclusão de renovações casa por família de produto (não nome exato) —
+    ver financeiro/utils/data.py::load_desativacoes_mensais para detalhe da lógica.
+    """
     query = f"""
-    WITH desativados AS (
+    WITH mrr_base AS (
       SELECT
         st_sincro_sac, st_descricao_prd,
-        COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE))                    AS dt_fim,
-        DATE_TRUNC(COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE)), MONTH) AS mes,
-        valor_total
+        CAST(dt_fim_mens AS DATE)        AS dt_fim_mens,
+        CAST(dt_desativacao_sac AS DATE) AS dt_desativacao_sac,
+        valor_total,
+        MAX(CAST(dt_fim_mens AS DATE)) OVER (PARTITION BY st_sincro_sac) AS ultima_dt_fim_cliente
       FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
       WHERE dt_fim_mens IS NOT NULL
-        AND COALESCE(CAST(dt_desativacao_sac AS DATE), CAST(dt_fim_mens AS DATE)) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
         AND st_descricao_prd NOT LIKE '%Setup%'
         AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
-        AND {_EXCL_MODULOS.format(col="st_descricao_prd")}
+    ),
+    desativados AS (
+      SELECT
+        st_sincro_sac, st_descricao_prd,
+        {_DT_FIM_EFETIVO.format(fim_col="dt_fim_mens", ultima_col="ultima_dt_fim_cliente", desativ_col="dt_desativacao_sac")} AS dt_fim,
+        DATE_TRUNC({_DT_FIM_EFETIVO.format(fim_col="dt_fim_mens", ultima_col="ultima_dt_fim_cliente", desativ_col="dt_desativacao_sac")}, MONTH) AS mes,
+        valor_total
+      FROM mrr_base
+      WHERE {_EXCL_MODULOS.format(col="st_descricao_prd")}
         AND valor_total > 0
         AND {_EXCL_NAO_MENSALIDADE.format(col="st_descricao_prd")}
+        AND {_DT_FIM_EFETIVO.format(fim_col="dt_fim_mens", ultima_col="ultima_dt_fim_cliente", desativ_col="dt_desativacao_sac")} >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 17 MONTH)
       UNION ALL
       SELECT
         m.st_sincro_sac, m.st_descricao_prd,
@@ -818,12 +879,18 @@ def load_churn_por_plano() -> pd.DataFrame:
       QUALIFY ROW_NUMBER() OVER (PARTITION BY m.st_sincro_sac, m.st_descricao_prd ORDER BY m.dt_inicio_mens DESC) = 1
     ),
     renovacoes AS (
+      -- Restrição de cardinalidade 1:1 evita casar em massa clientes com vários
+      -- produtos simultâneos da mesma família (ex: denominação com várias igrejas
+      -- filhas, cada uma com sua própria faixa de membros).
       SELECT DISTINCT d.st_sincro_sac, d.st_descricao_prd, d.mes
       FROM desativados d
       INNER JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` r
-        ON d.st_sincro_sac = r.st_sincro_sac AND d.st_descricao_prd = r.st_descricao_prd
+        ON d.st_sincro_sac = r.st_sincro_sac
+        AND {_FAMILIA_PRODUTO.format(col="d.st_descricao_prd")} = {_FAMILIA_PRODUTO.format(col="r.st_descricao_prd")}
         AND DATE_TRUNC(CAST(r.dt_inicio_mens AS DATE), MONTH) = DATE_ADD(d.mes, INTERVAL 1 MONTH)
       WHERE d.dt_fim = LAST_DAY(d.dt_fim) AND r.dt_inicio_mens IS NOT NULL
+      QUALIFY COUNT(DISTINCT d.st_descricao_prd) OVER (PARTITION BY d.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="d.st_descricao_prd")}, d.mes) = 1
+           AND COUNT(DISTINCT r.st_descricao_prd) OVER (PARTITION BY d.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="d.st_descricao_prd")}, d.mes) = 1
     )
     SELECT
       d.mes,
