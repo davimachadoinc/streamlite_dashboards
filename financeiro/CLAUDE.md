@@ -14,7 +14,7 @@ C:\Claude_Files\
     ├── app.py                    # Entry point — autenticação Google OIDC
     ├── CLAUDE.md                 # Este arquivo
     ├── pages/
-    │   ├── 1_📊_Cobranca.py      # Dashboard de Cobrança & Módulos
+    │   ├── 1_Receita.py          # Dashboard de Receita & Módulos
     │   ├── 2_❌_Desativacoes.py  # Dashboard de Desativações & MRR perdido
     │   ├── 3_💳_Transacoes.py    # Dashboard de Transações por método
     │   └── 4_⚠️_Inadimplencia.py # Dashboard de Inadimplência 30d/90d
@@ -37,7 +37,7 @@ C:\Claude_Files\
 ### Autenticação
 - Gerenciada em `app.py` via `st.login()` / `st.logout()` (Google OIDC nativo do Streamlit).
 - Lista de e-mails permitidos em `st.secrets["app_config"]["allowed_emails"]`.
-- Ao final de `app.py`, redireciona com `st.switch_page("pages/1_📊_Cobranca.py")`.
+- Ao final de `app.py`, redireciona com `st.switch_page("pages/1_Receita.py")`.
 - As páginas individualmente **não fazem redirect de login**, apenas param com erro.
 
 ### Cache
@@ -66,6 +66,7 @@ C:\Claude_Files\
 | `load_inadimplencia_serie()` | Snapshot diário de inadimplência 30d/90d — loop Python sobre dias úteis com numpy |
 | `load_inadimplencia_por_plano()` | Snapshot atual: clientes e valor em aberto por plano (janela 30d) |
 | `load_inadimplencia_top_clientes(dias)` | Top 30 inadimplentes na janela de `dias` dias (30 ou 90) |
+| `load_receita_liquidada_diaria(n_meses)` | Receita liquidada por dia (`dt_liquidacao_recb`) via `splgc-cobrancas_liquidacao-all`, para o gráfico de ritmo diário acumulado |
 
 ### Design system (`utils/style.py`)
 - Tema: dark mode, fonte Outfit, acento verde `#6eda2c`.
@@ -121,6 +122,12 @@ WHERE tertiarygroup_is_active = TRUE
 - **Não usar `fl_status_recb`** para análise histórica — reflete estado atual. Usar `dt_liquidacao_recb`.
 - Cliente inadimplente válido: `comp_valor > 1` E já pagou algum boleto (`EXISTS fl_status_recb='1'`).
 - Snapshot de perfil (por plano, top clientes): usar `fl_status_recb='0'` com filtro `BETWEEN D-30 AND D` — estado atual é suficiente para o snapshot de hoje.
+
+### Receita liquidada por dia (`splgc-cobrancas_liquidacao-all`)
+- Tabela dedicada de boletos pagos — **toda linha já é `fl_status_recb='1'`**, não precisa filtrar.
+- 1 linha por item de composição do boleto: `vl_total_recb` se repete por linha — **dedup obrigatório por `id_recebimento_recb`** antes de somar, senão infla ~10x (mesmo padrão de `load_contratos_mensais`).
+- Data-chave: `dt_liquidacao_recb` (dia real em que o dinheiro entrou), não `dt_vencimento_recb`.
+- Usada no gráfico de ritmo diário acumulado (mês atual vs. 3 anteriores) na aba Receita.
 
 ### Datas no BigQuery
 - `dt_vencimento_recb` e `dt_liquidacao_recb` são TIMESTAMP — sempre usar `CAST(... AS DATE)` antes de comparar.

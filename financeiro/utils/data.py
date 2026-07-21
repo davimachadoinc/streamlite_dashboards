@@ -390,6 +390,45 @@ def load_receita_modulos_mensais() -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=3600)
+def load_receita_liquidada_diaria(n_meses: int = 4) -> pd.DataFrame:
+    """
+    Receita liquidada por dia (dt_liquidacao_recb), últimos n_meses (mês atual incluso).
+    Fonte: splgc-cobrancas_liquidacao-all — tabela só contém boletos pagos
+    (fl_status_recb='1' em 100% das linhas), 1 linha por item de composição.
+    Dedup por id_recebimento_recb antes de somar vl_total_recb, senão infla ~10x
+    (mesmo padrão de load_contratos_mensais, só que agrupando por dia de
+    liquidação em vez de mês de vencimento).
+    """
+    query = f"""
+    WITH dedup AS (
+      SELECT
+        CAST(dt_liquidacao_recb AS DATE) AS dia,
+        id_recebimento_recb,
+        vl_total_recb,
+        ROW_NUMBER() OVER (
+          PARTITION BY id_recebimento_recb
+          ORDER BY dt_liquidacao_recb
+        ) AS rn
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_liquidacao-all`
+      WHERE CAST(dt_liquidacao_recb AS DATE)
+              >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL {n_meses - 1} MONTH), MONTH)
+        AND CAST(dt_liquidacao_recb AS DATE) <= CURRENT_DATE()
+    )
+    SELECT
+      dia,
+      SUM(vl_total_recb) AS receita_liquidada
+    FROM dedup
+    WHERE rn = 1
+    GROUP BY dia
+    ORDER BY dia
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["dia"] = pd.to_datetime(df["dia"])
+    return df
+
+
 # ─────────────────────────────────────────────
 # ── PÁGINA 2: TRANSAÇÕES ─────────────────────
 # ─────────────────────────────────────────────

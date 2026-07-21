@@ -1,18 +1,19 @@
 """
-pages/1_📊_Cobranca.py
-Dashboard de Cobrança — últimos 15 meses.
+pages/1_Receita.py
+Dashboard de Receita — últimos 15 meses.
 """
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
+from dateutil.relativedelta import relativedelta
 
-st.set_page_config(page_title="Cobrança | InChurch", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Receita | InChurch", page_icon="📊", layout="wide")
 
 if not st.user.is_logged_in:
     st.error("⛔ Acesso não autorizado. Faça login na página inicial.")
     st.stop()
 
-st.session_state["_page_key"] = "cobranca"
+st.session_state["_page_key"] = "receita"
 
 from utils.style import inject_css
 from utils.data import (
@@ -20,7 +21,7 @@ from utils.data import (
     chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
     load_contratos_mensais, load_modulos_mensais, load_receita_modulos_mensais,
-    load_receita_planos_mensais,
+    load_receita_planos_mensais, load_receita_liquidada_diaria,
 )
 
 inject_css()
@@ -28,7 +29,7 @@ inject_css()
 # ── Header ────────────────────────────────────
 col_title, col_filter = st.columns([8, 2], vertical_alignment="bottom")
 with col_title:
-    st.markdown("<h1>Cobrança <span>& Receita</span></h1>", unsafe_allow_html=True)
+    st.markdown("<h1>Receita</h1>", unsafe_allow_html=True)
 with col_filter:
     n_months = period_selector()
 
@@ -208,7 +209,7 @@ st.divider()
 # ─────────────────────────────────────────────
 # SEÇÃO 4 — Receita Total: Emitida vs Liquidada (largura inteira)
 # ─────────────────────────────────────────────
-st.subheader("Receita Total: Emitida vs Liquidada")
+st.subheader("Receita com Vencimento no Mês X que foi Liquidada")
 if df_contratos.empty:
     no_data()
 else:
@@ -227,3 +228,55 @@ else:
         xaxis=dict(categoryorder="array", categoryarray=x_order, type="category"),
     )
     st.plotly_chart(chart_layout(fig, height=380, legend_bottom=True), use_container_width=True)
+
+st.divider()
+
+# ─────────────────────────────────────────────
+# SEÇÃO 5 — Receita Liquidada: Ritmo Diário Acumulado
+# (Mês atual vs. 3 meses anteriores, por dia de liquidação)
+# ─────────────────────────────────────────────
+st.subheader("Receita Liquidada — Ritmo Diário Acumulado")
+df_diaria = load_receita_liquidada_diaria(n_meses=4)
+
+if df_diaria.empty:
+    no_data()
+else:
+    # dia_max: último dia com liquidação já lançada no BQ (evita queda falsa no
+    # fim da linha do mês atual por atraso de pipeline — mesmo padrão do take rate).
+    dia_max     = df_diaria["dia"].max()
+    inicio_mes_atual = dia_max.replace(day=1)
+    meses_ref   = [inicio_mes_atual - relativedelta(months=i) for i in range(3, -1, -1)]
+
+    GREY_SCALE = ["#4c4c4c", "#a0a0a0", "#cccccc"]  # mais antigo → mais recente (exceto atual)
+    serie_diaria = df_diaria.set_index("dia")["receita_liquidada"]
+
+    fig = go.Figure()
+    max_dias = 0
+    for idx, mes_ini in enumerate(meses_ref):
+        is_atual = mes_ini == inicio_mes_atual
+        mes_fim = dia_max if is_atual else (mes_ini + relativedelta(months=1) - pd.Timedelta(days=1))
+
+        dias_do_mes = pd.date_range(mes_ini, mes_fim, freq="D")
+        acumulado   = serie_diaria.reindex(dias_do_mes, fill_value=0).cumsum()
+        max_dias    = max(max_dias, len(acumulado))
+
+        cor   = PALETTE[0] if is_atual else GREY_SCALE[idx]
+        label = mes_ini.strftime("%b/%y").capitalize() + (" (atual)" if is_atual else "")
+
+        fig.add_scatter(
+            x=[str(d) for d in range(1, len(acumulado) + 1)],
+            y=acumulado.values,
+            name=label, mode="lines",
+            line=dict(color=cor, width=3.5 if is_atual else 2),
+        )
+
+    fig.update_layout(
+        xaxis=dict(
+            title="Dia do mês",
+            categoryorder="array",
+            categoryarray=[str(d) for d in range(1, max_dias + 1)],
+            type="category",
+        ),
+        yaxis=dict(title="Receita liquidada acumulada (R$)"),
+    )
+    st.plotly_chart(chart_layout(fig, height=420, legend_bottom=True), use_container_width=True)
