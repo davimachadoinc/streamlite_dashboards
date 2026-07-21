@@ -247,7 +247,8 @@ else:
     inicio_mes_atual = dia_max.replace(day=1)
     meses_ref   = [inicio_mes_atual - relativedelta(months=i) for i in range(3, -1, -1)]
 
-    GREY_SCALE = ["#4c4c4c", "#a0a0a0", "#cccccc"]  # mais antigo → mais recente (exceto atual)
+    GREY_SCALE  = ["#4c4c4c", "#a0a0a0", "#cccccc"]  # mais antigo → mais recente (exceto atual)
+    DASH_STYLES = ["dot", "dash", "solid"]           # 3 meses atrás, 2 meses atrás, mês anterior
     serie_diaria = df_diaria.set_index("dia")["receita_liquidada"]
 
     fig = go.Figure()
@@ -261,13 +262,14 @@ else:
         max_dias    = max(max_dias, len(acumulado))
 
         cor   = PALETTE[0] if is_atual else GREY_SCALE[idx]
+        dash  = "solid" if is_atual else DASH_STYLES[idx]
         label = mes_ini.strftime("%b/%y").capitalize() + (" (atual)" if is_atual else "")
 
         fig.add_scatter(
             x=[str(d) for d in range(1, len(acumulado) + 1)],
             y=acumulado.values,
             name=label, mode="lines",
-            line=dict(color=cor, width=3.5 if is_atual else 2),
+            line=dict(color=cor, width=3.5 if is_atual else 2, dash=dash),
         )
 
     fig.update_layout(
