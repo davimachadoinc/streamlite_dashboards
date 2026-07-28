@@ -828,6 +828,113 @@ def load_desativacoes_mensais() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
+def load_desativacoes_total_parcial() -> pd.DataFrame:
+    """
+    Desativações por mês classificadas em Total (cliente sem nenhum produto de
+    mensalidade ativo restante) e Parcial (cliente ainda tem ao menos 1 produto
+    ativo). Mesma base 'desativados' de load_desativacoes_mensais (sem exclusão
+    de módulos), mas colapsada por cliente/mês (não por produto/módulo) e
+    cruzada com a base ativa atual (dt_fim_mens IS NULL) em vw-splgc-tabela_mrr_validos.
+    """
+    query = f"""
+    WITH mrr_base AS (
+      SELECT
+        st_sincro_sac,
+        st_descricao_prd,
+        CAST(dt_fim_mens AS DATE)        AS dt_fim_mens,
+        CAST(dt_desativacao_sac AS DATE) AS dt_desativacao_sac,
+        valor_total,
+        MAX(CAST(dt_fim_mens AS DATE)) OVER (PARTITION BY st_sincro_sac) AS ultima_dt_fim_cliente
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NOT NULL
+        AND st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+    ),
+    desativados AS (
+      SELECT
+        st_sincro_sac,
+        st_descricao_prd,
+        {_DT_FIM_EFETIVO.format(fim_col="dt_fim_mens", ultima_col="ultima_dt_fim_cliente", desativ_col="dt_desativacao_sac")} AS dt_fim,
+        DATE_TRUNC({_DT_FIM_EFETIVO.format(fim_col="dt_fim_mens", ultima_col="ultima_dt_fim_cliente", desativ_col="dt_desativacao_sac")}, MONTH) AS mes,
+        valor_total
+      FROM mrr_base
+      WHERE valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="st_descricao_prd")}
+        AND {_DT_FIM_EFETIVO.format(fim_col="dt_fim_mens", ultima_col="ultima_dt_fim_cliente", desativ_col="dt_desativacao_sac")} >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+        AND {_DT_FIM_EFETIVO.format(fim_col="dt_fim_mens", ultima_col="ultima_dt_fim_cliente", desativ_col="dt_desativacao_sac")} <= LAST_DAY(CURRENT_DATE())
+      UNION ALL
+      -- Clientes com dt_desativacao_sac preenchida mas sem dt_fim_mens nos produtos
+      SELECT
+        m.st_sincro_sac,
+        m.st_descricao_prd,
+        CAST(c.dt_desativacao_sac AS DATE)                           AS dt_fim,
+        DATE_TRUNC(CAST(c.dt_desativacao_sac AS DATE), MONTH)        AS mes,
+        m.valor_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` m
+      INNER JOIN `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+        ON m.st_sincro_sac = c.st_sincro_sac
+      WHERE m.dt_fim_mens IS NULL
+        AND c.dt_desativacao_sac IS NOT NULL
+        AND CAST(c.dt_desativacao_sac AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+        AND CAST(c.dt_desativacao_sac AS DATE) <= LAST_DAY(CURRENT_DATE())
+        AND m.st_descricao_prd NOT LIKE '%Setup%'
+        AND m.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND m.valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="m.st_descricao_prd")}
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY m.st_sincro_sac, m.st_descricao_prd
+        ORDER BY m.dt_inicio_mens DESC
+      ) = 1
+    ),
+    renovacoes AS (
+      SELECT DISTINCT
+        d.st_sincro_sac,
+        d.st_descricao_prd,
+        d.mes
+      FROM desativados d
+      INNER JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` r
+        ON  d.st_sincro_sac = r.st_sincro_sac
+        AND {_FAMILIA_PRODUTO.format(col="d.st_descricao_prd")} = {_FAMILIA_PRODUTO.format(col="r.st_descricao_prd")}
+        AND DATE_TRUNC(CAST(r.dt_inicio_mens AS DATE), MONTH) = DATE_ADD(d.mes, INTERVAL 1 MONTH)
+      WHERE d.dt_fim = LAST_DAY(d.dt_fim)
+        AND r.dt_inicio_mens IS NOT NULL
+      QUALIFY COUNT(DISTINCT d.st_descricao_prd) OVER (PARTITION BY d.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="d.st_descricao_prd")}, d.mes) = 1
+           AND COUNT(DISTINCT r.st_descricao_prd) OVER (PARTITION BY d.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="d.st_descricao_prd")}, d.mes) = 1
+    ),
+    desativados_cliente AS (
+      -- 1 linha por cliente/mês — colapsa múltiplos produtos desativados no mesmo mês
+      SELECT DISTINCT d.st_sincro_sac, d.mes
+      FROM desativados d
+      LEFT JOIN renovacoes rv
+        ON  d.st_sincro_sac    = rv.st_sincro_sac
+        AND d.st_descricao_prd = rv.st_descricao_prd
+        AND d.mes              = rv.mes
+      WHERE rv.st_sincro_sac IS NULL
+    ),
+    ativos_atuais AS (
+      -- Clientes com pelo menos 1 produto de mensalidade ainda ativo hoje
+      SELECT DISTINCT st_sincro_sac
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NULL
+        AND valor_total > 0
+        AND {_EXCL_NAO_MENSALIDADE.format(col="st_descricao_prd")}
+    )
+    SELECT
+      dc.mes,
+      CASE WHEN a.st_sincro_sac IS NULL THEN 'total' ELSE 'parcial' END AS tipo,
+      COUNT(DISTINCT dc.st_sincro_sac) AS clientes_desativados
+    FROM desativados_cliente dc
+    LEFT JOIN ativos_atuais a ON dc.st_sincro_sac = a.st_sincro_sac
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+    return df
+
+
+@st.cache_data(ttl=3600)
 def load_receita_planos_mensais() -> pd.DataFrame:
     """
     Receita emitida e liquidada por PLANO BASE por mês (últimos 15 meses).

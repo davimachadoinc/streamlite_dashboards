@@ -21,7 +21,7 @@ from utils.data import (
     chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data, fmt_brl,
     load_desativacoes_mensais, load_desativacoes_por_plano, load_base_ativa_por_plano,
-    load_desativacoes_detalhado,
+    load_desativacoes_detalhado, load_desativacoes_total_parcial,
 )
 
 inject_css()
@@ -38,6 +38,7 @@ with st.spinner("Carregando dados de desativações..."):
     df_raw           = load_desativacoes_mensais()
     df_desativ_plano = load_desativacoes_por_plano()
     df_base_plano    = load_base_ativa_por_plano()
+    df_tot_parc      = load_desativacoes_total_parcial()
 
 if df_raw.empty:
     no_data("Nenhum dado de desativação encontrado.")
@@ -46,6 +47,7 @@ if df_raw.empty:
 df_raw           = filter_months(df_raw,           n_months, "mes")
 df_desativ_plano = filter_months(df_desativ_plano, n_months, "mes")
 df_base_plano    = filter_months(df_base_plano,    n_months, "mes")
+df_tot_parc      = filter_months(df_tot_parc,      n_months, "mes")
 
 if df_raw.empty:
     no_data("Nenhuma desativação no período selecionado.")
@@ -61,7 +63,7 @@ df_total = (
 
 # ── KPI Cards ─────────────────────────────────
 st.subheader("Visão Geral do Período")
-k1, k2, k3, k4 = st.columns(4)
+k1, k2, k3, k4, k5 = st.columns(5)
 
 curr_mrr = last_val(df_total, "mrr_perdido", "mes")
 prev_mrr = prev_val(df_total, "mrr_perdido", "mes")
@@ -76,17 +78,33 @@ mrr_total_periodo = df_raw["mrr_perdido"].sum()
 with k2:
     st.metric("MRR Perdido (período)", f"R$ {fmt_brl(mrr_total_periodo)}")
 
-curr_cli = last_val(df_total, "clientes_desativados", "mes")
-prev_cli = prev_val(df_total, "clientes_desativados", "mes")
+# Desativações Totais x Parciais — cliente sem nenhum produto ativo restante
+# (Total) vs. cliente que ainda tem ao menos 1 produto ativo (Parcial).
+df_tot = df_tot_parc[df_tot_parc["tipo"] == "total"]
+df_par = df_tot_parc[df_tot_parc["tipo"] == "parcial"]
+
+curr_tot = last_val(df_tot, "clientes_desativados", "mes")
+prev_tot = prev_val(df_tot, "clientes_desativados", "mes")
 with k3:
     st.metric(
-        "Clientes Desativados (último mês)",
-        f"{int(curr_cli):,}".replace(",", ".") if curr_cli else "—",
-        delta=delta_str(curr_cli, prev_cli),
+        "Desativações Totais (último mês)",
+        f"{int(curr_tot):,}".replace(",", ".") if curr_tot else "—",
+        delta=delta_str(curr_tot, prev_tot),
+        help="Cliente sem nenhum produto de mensalidade ativo restante.",
+    )
+
+curr_par = last_val(df_par, "clientes_desativados", "mes")
+prev_par = prev_val(df_par, "clientes_desativados", "mes")
+with k4:
+    st.metric(
+        "Desativações Parciais (último mês)",
+        f"{int(curr_par):,}".replace(",", ".") if curr_par else "—",
+        delta=delta_str(curr_par, prev_par),
+        help="Cliente desativou ao menos 1 produto, mas ainda tem outro(s) ativo(s).",
     )
 
 cli_total_periodo = int(df_raw["clientes_desativados"].sum())
-with k4:
+with k5:
     st.metric("Clientes Desativados (período)", f"{cli_total_periodo:,}".replace(",", "."))
 
 st.divider()
