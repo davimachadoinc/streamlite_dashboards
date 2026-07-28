@@ -111,18 +111,28 @@ st.divider()
 
 # ─────────────────────────────────────────────
 # SEÇÃO 1 — MRR Perdido Total por Mês (largura inteira)
+# Barras empilhadas: nº de desativações Totais + Parciais (eixo esquerdo)
+# Linha: MRR Perdido Total em R$ (eixo direito)
 # ─────────────────────────────────────────────
 st.subheader("MRR Perdido por Mês")
 df_plot_total, x_order_total = mes_fmt_ordered(df_total)
+df_tot_fmt, _ = mes_fmt_ordered(df_tot) if not df_tot.empty else (df_tot, [])
+df_par_fmt, _ = mes_fmt_ordered(df_par) if not df_par.empty else (df_par, [])
 
 fig = go.Figure()
 fig.add_bar(
-    x=df_plot_total["mes_fmt"],
-    y=df_plot_total["mrr_perdido"],
+    x=df_tot_fmt["mes_fmt"],
+    y=df_tot_fmt["clientes_desativados"],
+    name="Desativações Totais",
     marker_color=PALETTE[0],
-    text=df_plot_total["mrr_perdido"].apply(lambda v: f"R$ {fmt_brl(v, 0)}"),
-    textposition="outside",
-    textfont=dict(size=11, color="#a0a0a0"),
+    yaxis="y",
+)
+fig.add_bar(
+    x=df_par_fmt["mes_fmt"],
+    y=df_par_fmt["clientes_desativados"],
+    name="Desativações Parciais",
+    marker_color=PALETTE[3],
+    yaxis="y",
 )
 fig.add_scatter(
     x=df_plot_total["mes_fmt"],
@@ -130,14 +140,21 @@ fig.add_scatter(
     mode="lines+markers",
     line=dict(color=PALETTE[1], width=2, dash="dot"),
     marker=dict(size=6),
-    name="Tendência",
-    showlegend=True,
+    name="MRR Perdido (R$)",
+    yaxis="y2",
 )
+fig = chart_layout(fig, height=420)
 fig.update_layout(
+    barmode="stack",
     showlegend=True,
     xaxis=dict(categoryorder="array", categoryarray=x_order_total, type="category"),
+    yaxis=dict(title="Clientes desativados"),
+    yaxis2=dict(
+        title="MRR Perdido (R$)", overlaying="y", side="right",
+        showgrid=False, zeroline=False,
+    ),
 )
-st.plotly_chart(chart_layout(fig, height=420), use_container_width=True)
+st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
