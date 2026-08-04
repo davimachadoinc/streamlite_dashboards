@@ -262,8 +262,11 @@ def load_mrr_ativo_por_igreja() -> pd.DataFrame:
     desativações (Financeiro). Sem essa exclusão, "Reajuste Anual" soma como
     MRR extra além da mensalidade que ele ajusta (dupla contagem).
     Plano é classificado a partir da linha de mensalidade base (módulos
-    excluídos); se houver mais de uma linha base num mesmo cliente, prevalece
-    a de maior valor.
+    excluídos). Se o cliente tiver mais de uma linha base simultânea, PRO
+    sempre prevalece sobre as demais categorias (ex: Squad as a Service +
+    PRO = PRO; PRO + FILHA = PRO), mesmo que a outra linha tenha valor maior
+    — regra de negócio confirmada em 2026-08-04. Sem PRO na mistura, prevalece
+    a linha de maior valor (comportamento anterior, inalterado).
     Retorna: st_sincro_sac, nome_splgc, mrr_ativo, plano.
     """
     query = f"""
@@ -290,7 +293,12 @@ def load_mrr_ativo_por_igreja() -> pd.DataFrame:
         valor_total
       FROM mrr_lines
       WHERE {_EXCL_MODULOS.format(col="st_descricao_prd")}
-      QUALIFY ROW_NUMBER() OVER (PARTITION BY st_sincro_sac ORDER BY valor_total DESC) = 1
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY st_sincro_sac
+        ORDER BY
+          CASE WHEN {_PLAN_CASE.format(col="st_descricao_prd")} = 'pro' THEN 0 ELSE 1 END,
+          valor_total DESC
+      ) = 1
     )
     SELECT
       t.st_sincro_sac,
