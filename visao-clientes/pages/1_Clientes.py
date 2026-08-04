@@ -82,6 +82,12 @@ disp["plano"] = disp["plano"].map(lambda p: PLAN_LABELS.get(p, p.title()))
 disp["variacao_fmt"] = disp["transacionado_variacao_mom"].apply(
     lambda v: "—" if pd.isna(v) else f"{'▲' if v >= 0 else '▼'} {v:+.1f}%"
 )
+# LineChartColumn não suporta cor por célula — para igrejas sem nenhuma
+# transação nos 6 meses, remove os dados da célula (fica vazia/neutra no grid)
+# em vez de desenhar uma linha colorida achatada em zero.
+disp["transacionado_trend"] = disp["transacionado_trend"].apply(
+    lambda v: v if isinstance(v, list) and any(x > 0 for x in v) else None
+)
 
 disp = disp.rename(columns={
     "tertiarygroup_name":     "Igreja",
