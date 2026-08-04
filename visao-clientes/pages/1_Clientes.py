@@ -84,7 +84,6 @@ disp["variacao_fmt"] = disp["transacionado_variacao_mom"].apply(
 )
 
 disp = disp.rename(columns={
-    "tertiarygroup_id":       "ID",
     "tertiarygroup_name":     "Igreja",
     "plano":                  "Plano",
     "mrr_ativo":              "MRR Ativo (R$)",
@@ -95,7 +94,7 @@ disp = disp.rename(columns={
 
 st.dataframe(
     disp[[
-        "ID", "Igreja", "Plano", "MRR Ativo (R$)",
+        "Igreja", "Plano", "MRR Ativo (R$)",
         "Tendência (6m)", "Transacionado Mês Atual (R$)", "Variação (mesmo período mês anterior)",
     ]],
     use_container_width=True,
