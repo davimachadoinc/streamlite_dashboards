@@ -1,6 +1,6 @@
 """
 pages/1_Clientes.py
-Tabela de clientes: MRR ativo e transacionado (TPV) dos últimos 6 meses, com filtro de plano.
+Tabela de clientes: MRR ativo e transacionado (TPV) mês a mês, com filtro de plano.
 """
 import streamlit as st
 import pandas as pd
@@ -27,9 +27,10 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
     st.caption(
-        "**MRR ativo** = soma das mensalidades vigentes hoje no Superlógica (exclui Setup/PRO-RATA).\n\n"
-        "**Transacionado (6m)** = volume pago via pix/crédito/boleto na plataforma InChurch "
-        "nos últimos 6 meses (exclui métodos free/external/debit)."
+        "**MRR ativo** = soma das mensalidades vigentes hoje no Superlógica (exclui Setup/PRO-RATA/"
+        "Desconto/Abono/Intermediação/Acordo/Reajuste).\n\n"
+        "**Transacionado** = volume pago via pix/crédito/boleto na plataforma InChurch "
+        "(exclui métodos free/external/debit). Tendência = últimos 6 meses; variação = mês atual vs. mês anterior."
     )
 
 st.markdown("<h1>Visão de <span>Clientes</span></h1>", unsafe_allow_html=True)
@@ -61,7 +62,7 @@ with k1:
 with k2:
     st.metric("MRR Ativo Total", f"R$ {fmt_brl(df_f['mrr_ativo'].sum(), 0)}")
 with k3:
-    st.metric("Transacionado Total (6m)", f"R$ {fmt_brl(df_f['transacionado_6m'].sum(), 0)}")
+    st.metric("Transacionado Total (mês atual)", f"R$ {fmt_brl(df_f['transacionado_mes_atual'].sum(), 0)}")
 
 st.divider()
 
@@ -76,19 +77,32 @@ st.caption(f"{len(df_show)} igrejas")
 
 disp = df_show.copy()
 disp["plano"] = disp["plano"].map(lambda p: PLAN_LABELS.get(p, p.title()))
-disp["mrr_ativo"] = disp["mrr_ativo"].apply(lambda v: fmt_brl(v, 2))
-disp["transacionado_6m"] = disp["transacionado_6m"].apply(lambda v: fmt_brl(v, 2))
+disp["variacao_fmt"] = disp["transacionado_variacao_mom"].apply(
+    lambda v: "—" if pd.isna(v) else f"{'▲' if v >= 0 else '▼'} {v:+.1f}%"
+)
 
 disp = disp.rename(columns={
-    "tertiarygroup_id":   "ID",
-    "tertiarygroup_name": "Igreja",
-    "plano":              "Plano",
-    "mrr_ativo":          "MRR Ativo (R$)",
-    "transacionado_6m":   "Transacionado 6m (R$)",
+    "tertiarygroup_id":       "ID",
+    "tertiarygroup_name":     "Igreja",
+    "plano":                  "Plano",
+    "mrr_ativo":              "MRR Ativo (R$)",
+    "transacionado_trend":    "Tendência (6m)",
+    "transacionado_mes_atual":"Transacionado Mês Atual (R$)",
+    "variacao_fmt":           "Variação vs. Mês Anterior",
 })
 
 st.dataframe(
-    disp[["ID", "Igreja", "Plano", "MRR Ativo (R$)", "Transacionado 6m (R$)"]],
+    disp[[
+        "ID", "Igreja", "Plano", "MRR Ativo (R$)",
+        "Tendência (6m)", "Transacionado Mês Atual (R$)", "Variação vs. Mês Anterior",
+    ]],
     use_container_width=True,
     hide_index=True,
+    column_config={
+        "MRR Ativo (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+        "Tendência (6m)": st.column_config.LineChartColumn(
+            "Tendência (6m)", help="Transacionado nos últimos 6 meses (mais antigo → mais recente)",
+        ),
+        "Transacionado Mês Atual (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+    },
 )
