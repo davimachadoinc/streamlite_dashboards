@@ -15,7 +15,7 @@ st.session_state["_page_key"] = "visao_clientes"
 
 from utils.style import inject_css
 from utils.data import (
-    PLAN_LABELS, DEFAULT_PLAN_FILTER,
+    PLAN_LABELS,
     fmt_brl, no_data, load_visao_clientes,
 )
 
@@ -46,12 +46,11 @@ if df.empty:
 
 # ── Filtro de plano ────────────────────────────
 planos_disponiveis = sorted(df["plano"].dropna().unique().tolist())
-default_sel = [p for p in DEFAULT_PLAN_FILTER if p in planos_disponiveis] or planos_disponiveis
 
 planos_sel = st.multiselect(
     "Plano",
     options=planos_disponiveis,
-    default=default_sel,
+    default=planos_disponiveis,
     format_func=lambda p: PLAN_LABELS.get(p, p.title()),
 )
 

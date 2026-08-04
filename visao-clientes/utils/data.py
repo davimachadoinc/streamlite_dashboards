@@ -63,9 +63,6 @@ PLAN_COLORS = {
     "outros":  "#292929",
 }
 
-# Planos exibidos por padrão no filtro da página de Clientes
-DEFAULT_PLAN_FILTER = ["lite", "pro", "basic", "starter"]
-
 # ─────────────────────────────────────────────
 # CONSTANTES SQL REUTILIZADAS (mesmo padrão do dashboard Financeiro)
 # ─────────────────────────────────────────────
