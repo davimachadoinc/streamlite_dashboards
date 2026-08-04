@@ -305,26 +305,28 @@ def load_mrr_ativo_por_igreja() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def load_empresas() -> pd.DataFrame:
-    """Cadastro de igrejas (BQ_TECH) — id e nome oficial."""
+    """Cadastro de igrejas (BQ_TECH) — id/nome da igreja e da denominação (subgroup)."""
     query = """
-    SELECT tertiarygroup_id, tertiarygroup_name
+    SELECT tertiarygroup_id, tertiarygroup_name, subgroup_id, subgroup_name
     FROM `inchurch-gcp.backend_bi.view_company_list`
     """
     return _bq_query(query, "bigquery_tech")
 
 
 @st.cache_data(ttl=3600)
-def load_transacionado_mensal() -> pd.DataFrame:
+def load_transacionado_diario() -> pd.DataFrame:
     """
-    TPV mensal por igreja, últimos 6 meses (mês atual incluso, ainda que
+    TPV diário por igreja, últimos 6 meses (mês atual incluso, ainda que
     parcial). status active/payed, exclui métodos free/external/debit — ver
-    bigquery-regras.md. Retorna: tertiarygroup_id, mes, transacionado.
+    bigquery-regras.md. Granularidade diária permite comparar o mês atual
+    contra o MESMO período (dia 1 até hoje) do mês anterior.
+    Retorna: tertiarygroup_id, dia, transacionado.
     """
     query = """
     SELECT
       tertiarygroup_id,
-      DATE_TRUNC(CAST(datetime AS DATE), MONTH) AS mes,
-      SUM(value)                                 AS transacionado
+      CAST(datetime AS DATE) AS dia,
+      SUM(value)             AS transacionado
     FROM `inchurch-gcp.backend_bi.view_transaction`
     WHERE status IN ('active', 'payed')
       AND method NOT IN ('free', 'external', 'debit')
@@ -333,7 +335,7 @@ def load_transacionado_mensal() -> pd.DataFrame:
     """
     df = _bq_query(query, "bigquery_tech")
     if not df.empty:
-        df["mes"] = pd.to_datetime(df["mes"])
+        df["dia"] = pd.to_datetime(df["dia"])
     return df
 
 
@@ -343,49 +345,97 @@ def _meses_janela_6m() -> list[pd.Timestamp]:
     return [inicio_mes_atual - pd.DateOffset(months=i) for i in range(5, -1, -1)]
 
 
-def _build_trend_mensal(ids: pd.Series, df_tpv_mensal: pd.DataFrame) -> pd.DataFrame:
+def _build_trend_mensal(ids: pd.Series, df_tpv_diario: pd.DataFrame) -> pd.DataFrame:
     """
     Para cada tertiarygroup_id em `ids`, monta a série dos últimos 6 meses de
     transacionado (preenchendo com 0 onde não há transação), o valor nominal
-    do mês atual e a variação % vs. o mês imediatamente anterior (MoM).
+    do mês atual (soma de todos os dias já ocorridos) e a variação % contra o
+    MESMO período do mês anterior — dia 1 até o dia de hoje em ambos os meses,
+    não o mês anterior completo. Isso evita comparar um mês atual parcial
+    (ex: só 4 dias) contra um mês anterior fechado (30 dias), o que sempre
+    daria uma "queda" artificial no início do mês.
     Retorna: tertiarygroup_id, transacionado_trend (list[float]),
              transacionado_mes_atual, transacionado_variacao_mom (% ou None).
     """
     meses = _meses_janela_6m()
+    mes_atual_ts = meses[-1]
+    mes_anterior_ts = meses[-2]
+    dia_do_mes = pd.Timestamp.today().day
+
     base = pd.DataFrame({"tertiarygroup_id": pd.unique(ids)})
     base["tertiarygroup_id"] = base["tertiarygroup_id"].astype("Int64")
+    base_idx = base["tertiarygroup_id"]
 
-    if df_tpv_mensal.empty:
-        pivot = pd.DataFrame(0.0, index=base["tertiarygroup_id"], columns=meses)
+    if df_tpv_diario.empty:
+        pivot = pd.DataFrame(0.0, index=base_idx, columns=meses)
+        mtd_atual = pd.Series(0.0, index=base_idx)
+        mtd_anterior_mesmo_periodo = pd.Series(0.0, index=base_idx)
     else:
-        df_tpv_mensal = df_tpv_mensal.copy()
-        df_tpv_mensal["tertiarygroup_id"] = df_tpv_mensal["tertiarygroup_id"].astype("Int64")
-        pivot = df_tpv_mensal.pivot_table(
+        df_tpv_diario = df_tpv_diario.copy()
+        df_tpv_diario["tertiarygroup_id"] = df_tpv_diario["tertiarygroup_id"].astype("Int64")
+        df_tpv_diario["mes"] = df_tpv_diario["dia"].dt.to_period("M").dt.to_timestamp()
+
+        pivot = df_tpv_diario.pivot_table(
             index="tertiarygroup_id", columns="mes", values="transacionado",
             aggfunc="sum", fill_value=0.0,
         )
-        pivot = pivot.reindex(index=base["tertiarygroup_id"], fill_value=0.0)
+        pivot = pivot.reindex(index=base_idx, fill_value=0.0)
         for m in meses:
             if m not in pivot.columns:
                 pivot[m] = 0.0
         pivot = pivot[meses]
 
-    mes_atual = pivot[meses[-1]]
-    mes_anterior = pivot[meses[-2]]
-    variacao = ((mes_atual - mes_anterior) / mes_anterior.where(mes_anterior > 0) * 100).round(1)
+        mtd_atual = (
+            df_tpv_diario[(df_tpv_diario["mes"] == mes_atual_ts) & (df_tpv_diario["dia"].dt.day <= dia_do_mes)]
+            .groupby("tertiarygroup_id")["transacionado"].sum()
+            .reindex(base_idx, fill_value=0.0)
+        )
+        mtd_anterior_mesmo_periodo = (
+            df_tpv_diario[(df_tpv_diario["mes"] == mes_anterior_ts) & (df_tpv_diario["dia"].dt.day <= dia_do_mes)]
+            .groupby("tertiarygroup_id")["transacionado"].sum()
+            .reindex(base_idx, fill_value=0.0)
+        )
+
+    variacao = (
+        (mtd_atual - mtd_anterior_mesmo_periodo)
+        / mtd_anterior_mesmo_periodo.where(mtd_anterior_mesmo_periodo > 0) * 100
+    ).round(1)
 
     return pd.DataFrame({
         "tertiarygroup_id":            pivot.index,
         "transacionado_trend":         pivot.values.tolist(),
-        "transacionado_mes_atual":     mes_atual.values,
+        "transacionado_mes_atual":     pivot[mes_atual_ts].values,
         "transacionado_variacao_mom":  variacao.values,
     })
+
+
+def _format_nome_igreja(row) -> str:
+    """
+    "[subgroup_id] subgroup_name - (tertiarygroup_id) tertiarygroup_name" quando
+    há match em view_company_list (BQ_TECH). Sem esse match, cai para o nome do
+    Superlógica e, na ausência dele, para o próprio st_sincro_sac.
+    """
+    tert_name = row.get("tertiarygroup_name")
+    if pd.notna(tert_name) and str(tert_name).strip():
+        tert_id = row.get("tertiarygroup_id")
+        tert_part = f"({int(tert_id)}) {tert_name}" if pd.notna(tert_id) else str(tert_name)
+
+        sub_id = row.get("subgroup_id")
+        sub_name = row.get("subgroup_name")
+        if pd.notna(sub_id) and pd.notna(sub_name) and str(sub_name).strip():
+            return f"[{int(sub_id)}] {sub_name} - {tert_part}"
+        return tert_part
+
+    nome_splgc = row.get("nome_splgc")
+    if pd.notna(nome_splgc) and str(nome_splgc).strip():
+        return nome_splgc
+    return row.get("st_sincro_sac")
 
 
 @st.cache_data(ttl=3600)
 def load_visao_clientes() -> pd.DataFrame:
     """
-    Junta MRR ativo (BQ_BI) com nome oficial (BQ_TECH) e a série mensal de
+    Junta MRR ativo (BQ_BI) com cadastro oficial (BQ_TECH) e a série diária de
     transacionado dos últimos 6 meses (BQ_TECH). Escopo: apenas igrejas com
     MRR ativo hoje (join cross-project feito em pandas, convertendo
     tertiarygroup_id para string — ver bigquery-conexoes.md).
@@ -397,7 +447,7 @@ def load_visao_clientes() -> pd.DataFrame:
         return pd.DataFrame()
 
     df_emp = load_empresas()
-    df_tpv = load_transacionado_mensal()
+    df_tpv = load_transacionado_diario()
 
     df_mrr = df_mrr.copy()
     df_mrr["st_sincro_sac"] = df_mrr["st_sincro_sac"].astype(str)
@@ -407,7 +457,7 @@ def load_visao_clientes() -> pd.DataFrame:
         df_emp["tertiarygroup_id"] = df_emp["tertiarygroup_id"].astype("Int64")
         df_emp["_id_str"] = df_emp["tertiarygroup_id"].astype(str)
     else:
-        df_emp = pd.DataFrame(columns=["tertiarygroup_id", "tertiarygroup_name", "_id_str"])
+        df_emp = pd.DataFrame(columns=["tertiarygroup_id", "tertiarygroup_name", "subgroup_id", "subgroup_name", "_id_str"])
 
     df = df_mrr.merge(df_emp, left_on="st_sincro_sac", right_on="_id_str", how="left")
 
@@ -415,10 +465,8 @@ def load_visao_clientes() -> pd.DataFrame:
     id_from_bi = pd.to_numeric(df["st_sincro_sac"], errors="coerce")
     df["tertiarygroup_id"] = df["tertiarygroup_id"].fillna(id_from_bi).astype("Int64")
 
-    # nome: prioriza o nome oficial (view_company_list); cai para o nome do Superlógica
-    df["tertiarygroup_name"] = df["tertiarygroup_name"].fillna("").replace("", None)
-    df["tertiarygroup_name"] = df["tertiarygroup_name"].fillna(df["nome_splgc"])
-    df["tertiarygroup_name"] = df["tertiarygroup_name"].fillna(df["st_sincro_sac"])
+    # nome: "[subgroup_id] subgroup_name - (tertiarygroup_id) tertiarygroup_name"
+    df["tertiarygroup_name"] = df.apply(_format_nome_igreja, axis=1)
 
     try:
         trend_df = _build_trend_mensal(df["tertiarygroup_id"], df_tpv)

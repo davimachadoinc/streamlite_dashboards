@@ -30,7 +30,9 @@ with st.sidebar:
         "**MRR ativo** = soma das mensalidades vigentes hoje no Superlógica (exclui Setup/PRO-RATA/"
         "Desconto/Abono/Intermediação/Acordo/Reajuste).\n\n"
         "**Transacionado** = volume pago via pix/crédito/boleto na plataforma InChurch "
-        "(exclui métodos free/external/debit). Tendência = últimos 6 meses; variação = mês atual vs. mês anterior."
+        "(exclui métodos free/external/debit). Tendência = últimos 6 meses; variação = mês atual "
+        "(dia 1 até hoje) vs. o mesmo período do mês anterior — evita comparar um mês incompleto "
+        "contra um mês fechado."
     )
 
 st.markdown("<h1>Visão de <span>Clientes</span></h1>", unsafe_allow_html=True)
@@ -88,13 +90,13 @@ disp = disp.rename(columns={
     "mrr_ativo":              "MRR Ativo (R$)",
     "transacionado_trend":    "Tendência (6m)",
     "transacionado_mes_atual":"Transacionado Mês Atual (R$)",
-    "variacao_fmt":           "Variação vs. Mês Anterior",
+    "variacao_fmt":           "Variação (mesmo período mês anterior)",
 })
 
 st.dataframe(
     disp[[
         "ID", "Igreja", "Plano", "MRR Ativo (R$)",
-        "Tendência (6m)", "Transacionado Mês Atual (R$)", "Variação vs. Mês Anterior",
+        "Tendência (6m)", "Transacionado Mês Atual (R$)", "Variação (mesmo período mês anterior)",
     ]],
     use_container_width=True,
     hide_index=True,
