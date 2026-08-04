@@ -420,8 +420,29 @@ def load_visao_clientes() -> pd.DataFrame:
     df["tertiarygroup_name"] = df["tertiarygroup_name"].fillna(df["nome_splgc"])
     df["tertiarygroup_name"] = df["tertiarygroup_name"].fillna(df["st_sincro_sac"])
 
-    trend_df = _build_trend_mensal(df["tertiarygroup_id"], df_tpv)
-    df = df.merge(trend_df, on="tertiarygroup_id", how="left")
+    try:
+        trend_df = _build_trend_mensal(df["tertiarygroup_id"], df_tpv)
+        df = df.merge(trend_df, on="tertiarygroup_id", how="left")
+    except Exception as e:
+        # Nunca deixa a tabela de clientes cair por causa da série de transacionado —
+        # pior caso: mostra 0/— nessas colunas, mas MRR e cadastro continuam de pé.
+        st.warning(f"Não foi possível calcular o transacionado mensal: {e}")
+
+    # Garante que as 3 colunas de transacionado sempre existem no retorno, com
+    # fallback seguro — protege contra qualquer falha upstream (conexão BQ_TECH
+    # fora do ar, dado inesperado etc.) que impediria o merge acima de rodar.
+    if "transacionado_trend" not in df.columns:
+        df["transacionado_trend"] = [[0.0] * 6] * len(df)
+    else:
+        df["transacionado_trend"] = df["transacionado_trend"].apply(
+            lambda v: v if isinstance(v, list) else [0.0] * 6
+        )
+    if "transacionado_mes_atual" not in df.columns:
+        df["transacionado_mes_atual"] = 0.0
+    else:
+        df["transacionado_mes_atual"] = df["transacionado_mes_atual"].fillna(0.0)
+    if "transacionado_variacao_mom" not in df.columns:
+        df["transacionado_variacao_mom"] = None
 
     return (
         df[[
