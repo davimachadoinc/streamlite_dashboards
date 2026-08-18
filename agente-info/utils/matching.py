@@ -48,6 +48,7 @@ class CatalogEntry:
     validado_bq: bool
     fonte: str
     sql_template: str | None
+    serie_historica_id: str | None
 
 
 @dataclass
@@ -93,6 +94,7 @@ def carregar_catalogo() -> tuple[list[CatalogEntry], np.ndarray]:
             validado_bq=bool(row["validado_bq"]),
             fonte=row["fonte"],
             sql_template=row["sql_template"] if row["sql_template"] else None,
+            serie_historica_id=row["serie_historica_id"] if row["serie_historica_id"] else None,
         )
         for _, row in df.iterrows()
     ]

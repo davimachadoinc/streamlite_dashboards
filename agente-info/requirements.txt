@@ -9,3 +9,4 @@ db-dtypes>=1.1.1
 openai>=1.50
 numpy>=1.26
 requests>=2.31
+plotly>=5.20

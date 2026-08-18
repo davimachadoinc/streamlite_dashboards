@@ -6,6 +6,8 @@ SQL Livre com guardrails). Ver [BI] Dashboard_Agente_Informacao.md.
 """
 from datetime import datetime
 
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(page_title="Agente de Informação | InChurch", page_icon="🤖", layout="wide")
@@ -59,9 +61,62 @@ def _parse_valor(texto: str, tipo: str):
         return texto
 
 
+_PALETTE = ["#6eda2c", "#57d124", "#a0a0a0", "#8ae650", "#3ba811", "#cccccc"]
+
+
+def _grafico_serie_12m(df_serie: pd.DataFrame, saida_kpi: list[str]):
+    """
+    Gráfico dos últimos 12 meses (pedido do usuário 2026-08-19). Deriva
+    coluna de mês e métrica principal automaticamente -- métrica principal
+    é a que casa com o nome de saída do KPI original, quando existe; senão
+    pega a última coluna numérica. Se houver coluna categórica extra (ex:
+    'plano'), quebra em uma linha por categoria.
+    """
+    col_mes = next((c for c in df_serie.columns if c.startswith("mes")), None)
+    if not col_mes:
+        return None
+    col_categoria = next(
+        (c for c in df_serie.columns if c != col_mes and df_serie[c].dtype == object), None
+    )
+    numericas = [c for c in df_serie.columns if c not in (col_mes, col_categoria) and pd.api.types.is_numeric_dtype(df_serie[c])]
+    if not numericas:
+        return None
+    col_valor = next((c for c in numericas if c in saida_kpi), numericas[-1])
+
+    fig = go.Figure()
+    if col_categoria:
+        for i, cat in enumerate(sorted(df_serie[col_categoria].dropna().unique())):
+            sub = df_serie[df_serie[col_categoria] == cat].sort_values(col_mes)
+            fig.add_trace(go.Scatter(
+                x=sub[col_mes], y=sub[col_valor], name=str(cat), mode="lines+markers",
+                line=dict(color=_PALETTE[i % len(_PALETTE)], width=2),
+            ))
+    else:
+        sub = df_serie.sort_values(col_mes)
+        fig.add_trace(go.Scatter(
+            x=sub[col_mes], y=sub[col_valor], name=col_valor, mode="lines+markers",
+            line=dict(color=_PALETTE[0], width=2), fill="tozeroy", fillcolor="rgba(110,218,44,0.08)",
+        ))
+
+    fig.update_layout(
+        height=280, template="plotly_dark",
+        margin=dict(l=4, r=4, t=24, b=4),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Outfit, sans-serif", color="#ffffff", size=12),
+        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+        xaxis=dict(showgrid=True, gridcolor="#292929", title=""),
+        yaxis=dict(showgrid=True, gridcolor="#292929", title=""),
+    )
+    return fig
+
+
 def _renderizar_resultado(r):
     if r.status == "respondida":
         st.markdown(r.texto)
+        if r.df_serie is not None and not r.df_serie.empty:
+            fig = _grafico_serie_12m(r.df_serie, r.entry.saida)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         if r.df is not None and not r.df.empty and len(r.df) > 1:
             with st.expander(f"Ver dados completos ({len(r.df)} linhas)"):
                 st.dataframe(r.df, use_container_width=True)

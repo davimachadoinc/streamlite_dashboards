@@ -42,6 +42,7 @@ class RespostaWorkflow1:
     status: Literal["respondida", "faltando_parametro", "ambiguo", "sem_match", "sem_sql_template", "erro"]
     texto: str | None = None
     df: pd.DataFrame | None = None
+    df_serie: pd.DataFrame | None = None
     entry: CatalogEntry | None = None
     fonte_dados: str = "—"
     candidatos_ambiguo: list[tuple[CatalogEntry, float]] = field(default_factory=list)
@@ -142,17 +143,36 @@ def responder(
     custo_bq = resultado_query.bytes_processed / (2**40) * 6.25
     resposta = formatar_resposta(pergunta, entry.titulo, entry.limitacoes, resultado_query.df)
     custo_llm_total = custo_extracao + resposta.custo_usd
+    bytes_total = resultado_query.bytes_processed
+
+    # grafico automatico dos ultimos 12 meses (pedido do usuario 2026-08-19): se a
+    # entrada tem um par de serie historica cadastrado, busca junto -- sem custo de
+    # LLM (so mais uma query BQ, ja documentada/validada, sem parametro nenhum)
+    df_serie = None
+    if entry.serie_historica_id:
+        from utils.matching import carregar_catalogo
+        entries, _ = carregar_catalogo()
+        entry_serie = next((e for e in entries if e.id == entry.serie_historica_id), None)
+        if entry_serie and entry_serie.sql_template:
+            try:
+                resultado_serie = executar_query_catalogo(entry_serie, {})
+                df_serie = resultado_serie.df
+                bytes_total += resultado_serie.bytes_processed
+                custo_bq += resultado_serie.bytes_processed / (2**40) * 6.25
+            except Exception:
+                df_serie = None  # grafico e um extra -- nunca quebra a resposta principal
 
     return RespostaWorkflow1(
         status="respondida",
         texto=resposta.texto,
         df=resultado_query.df,
+        df_serie=df_serie,
         entry=entry,
         fonte_dados=identificar_fontes(entry.sql_template),
         tokens_embedding=tokens_embedding,
         tokens_llm_input=extracao.tokens_input + resposta.tokens_input,
         tokens_llm_output=extracao.tokens_output + resposta.tokens_output,
-        bytes_processed=resultado_query.bytes_processed,
+        bytes_processed=bytes_total,
         tempo_resposta_ms=resultado_query.tempo_resposta_ms,
         custo_embedding_usd=custo_embedding, custo_llm_usd=custo_llm_total, custo_bq_usd=custo_bq,
         custo_total_usd=custo_embedding + custo_llm_total + custo_bq,
