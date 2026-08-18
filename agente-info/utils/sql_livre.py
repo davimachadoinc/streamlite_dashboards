@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -31,10 +30,7 @@ MODELO_SQL_LIVRE = "gpt-5.6-terra"
 TETO_BYTES_PADRAO = 2**30  # 1 GiB -- guardrail 4
 LIMIT_PREVIA = 100  # guardrail 3
 
-_DOCS_FONTE = [
-    r"G:\Meu Drive\Obisidian\Davi\Documentacoes\[ALL] Queries_Gerais_BigQuery.md",
-    r"G:\Meu Drive\Obisidian\Davi\Documentacoes\[ALL] Queries_Gerais_BackendData.md",
-]
+GROUNDING_TABLE = "business-intelligence-467516.dashboard_agente_info.grounding_docs"
 
 _PALAVRAS_PROIBIDAS = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|MERGE|TRUNCATE|GRANT|REVOKE|CALL|EXPORT|LOAD)\b",
@@ -62,11 +58,17 @@ def _bq_client() -> bigquery.Client:
 
 @st.cache_data(ttl=3600)
 def _carregar_grounding() -> str:
-    """Guardrail 6 -- os documentos fonte inteiros, nao so o schema cru."""
-    partes = []
-    for caminho in _DOCS_FONTE:
-        texto = Path(caminho).read_text(encoding="utf-8")
-        partes.append(f"=== {Path(caminho).name} ===\n{texto}")
+    """
+    Guardrail 6 -- os documentos fonte inteiros, nao so o schema cru.
+    Le de `dashboard_agente_info.grounding_docs` (nao do disco local) para
+    funcionar tanto localmente quanto no Streamlit Cloud -- ver ADR-014.
+    Recarregar essa tabela sempre que os .md fonte no Obsidian mudarem
+    (script: scratchpad/load_grounding_docs.py no Runbook).
+    """
+    df = _bq_client().query(
+        f"SELECT nome_arquivo, conteudo FROM `{GROUNDING_TABLE}` ORDER BY nome_arquivo"
+    ).to_dataframe()
+    partes = [f"=== {row['nome_arquivo']} ===\n{row['conteudo']}" for _, row in df.iterrows()]
     return "\n\n".join(partes)
 
 
