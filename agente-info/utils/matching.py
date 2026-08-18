@@ -31,6 +31,22 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 LIMIAR_CONFIANTE = 0.65
 LIMIAR_AMBIGUO = 0.55
 
+# Calibrado em 2026-08-19 com 7 perguntas de teste (1 caso alvo + 6 controles,
+# ver Dashboard_Agente_Informacao.md): quando os 2 melhores candidatos vem de
+# fontes de dado DIFERENTES (Superlogica vs Backend) com score proximo, a
+# pergunta pode ter duas leituras validas (ex: "contratado" vs "realmente
+# ativo") -- sempre pergunta em vez de escolher calado, mesmo que o top-1
+# sozinho já fosse "confiante".
+GAP_AMBIGUIDADE_FONTE = 0.10
+
+
+def _classificar_fonte(tabelas: list[str]) -> str:
+    tem_backend = any("backend_data" in t for t in tabelas)
+    tem_superlogica = any("backend_data" not in t for t in tabelas)
+    if tem_backend and tem_superlogica:
+        return "ambos"
+    return "backend" if tem_backend else "superlogica"
+
 
 @dataclass
 class CatalogEntry:
@@ -127,6 +143,19 @@ def buscar_match(pergunta: str, top_k: int = 3) -> MatchResult:
         status = "ambiguo"
     else:
         status = "sem_match"
+
+    # ambiguidade de fonte (2026-08-19): mesmo "confiante", se o 2o colocado
+    # vem de uma fonte de dado diferente do 1o e o score ta perto, a pergunta
+    # pode ter duas leituras validas (contratado x realmente ativo) -- vira
+    # ambiguo pra sempre perguntar, nunca escolher calado
+    if status == "confiante" and len(candidatos) > 1:
+        fonte_top1 = _classificar_fonte(candidatos[0][0].tabelas)
+        for entry2, score2 in candidatos[1:]:
+            fonte2 = _classificar_fonte(entry2.tabelas)
+            if fonte2 != "ambos" and fonte_top1 != "ambos" and fonte2 != fonte_top1:
+                if (top_score - score2) <= GAP_AMBIGUIDADE_FONTE and score2 >= LIMIAR_AMBIGUO:
+                    status = "ambiguo"
+                break  # so compara com o 2o colocado
 
     return MatchResult(
         status=status,
