@@ -144,18 +144,22 @@ def buscar_match(pergunta: str, top_k: int = 3) -> MatchResult:
     else:
         status = "sem_match"
 
-    # ambiguidade de fonte (2026-08-19): mesmo "confiante", se o 2o colocado
-    # vem de uma fonte de dado diferente do 1o e o score ta perto, a pergunta
-    # pode ter duas leituras validas (contratado x realmente ativo) -- vira
-    # ambiguo pra sempre perguntar, nunca escolher calado
+    # ambiguidade de fonte (2026-08-19): mesmo "confiante", se existir entre os
+    # candidatos um de fonte DIFERENTE do top-1 (Superlogica vs Backend) com
+    # score proximo, a pergunta pode ter duas leituras validas (contratado x
+    # realmente ativo) -- vira ambiguo pra sempre perguntar, nunca escolher
+    # calado. Escaneia os candidatos em ordem ate achar o 1o de fonte
+    # diferente (pode nao ser o 2o colocado -- ver caso real testado no doc).
     if status == "confiante" and len(candidatos) > 1:
         fonte_top1 = _classificar_fonte(candidatos[0][0].tabelas)
-        for entry2, score2 in candidatos[1:]:
-            fonte2 = _classificar_fonte(entry2.tabelas)
-            if fonte2 != "ambos" and fonte_top1 != "ambos" and fonte2 != fonte_top1:
+        if fonte_top1 != "ambos":
+            for entry2, score2 in candidatos[1:]:
+                fonte2 = _classificar_fonte(entry2.tabelas)
+                if fonte2 == "ambos" or fonte2 == fonte_top1:
+                    continue  # nao e "a outra leitura" -- pula, continua procurando
                 if (top_score - score2) <= GAP_AMBIGUIDADE_FONTE and score2 >= LIMIAR_AMBIGUO:
                     status = "ambiguo"
-                break  # so compara com o 2o colocado
+                break  # achou o 1o candidato de fonte diferente -- decide com base nele e para
 
     return MatchResult(
         status=status,
