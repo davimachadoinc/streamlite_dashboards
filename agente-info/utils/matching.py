@@ -118,7 +118,7 @@ def carregar_catalogo() -> tuple[list[CatalogEntry], np.ndarray]:
     return entries, embeddings
 
 
-def buscar_match(pergunta: str, top_k: int = 3) -> MatchResult:
+def buscar_match(pergunta: str, top_k: int = 10) -> MatchResult:
     """
     Gera o embedding da pergunta e compara por cosseno contra o catalogo.
     NAO chama nenhum LLM de chat -- só o modelo de embedding (barato, ver

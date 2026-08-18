@@ -14,7 +14,7 @@ from typing import Literal
 
 import pandas as pd
 
-from utils.matching import CatalogEntry, MatchResult, buscar_match
+from utils.matching import CatalogEntry, MatchResult, buscar_match, LIMIAR_AMBIGUO
 from utils.data import executar_query_catalogo
 from utils.llm import extrair_parametros, formatar_resposta, custo_usd
 
@@ -91,8 +91,15 @@ def responder(
             )
 
         if match.status == "ambiguo":
+            # Pedido do usuario: mostrar pelo menos 5 opcoes (as mais bem
+            # rankeadas), mas so as que realmente passam do limiar de
+            # ambiguidade -- nunca oferecer um candidato fraco so pra
+            # completar a lista.
+            candidatos_acima_limiar = [
+                (entry, score) for entry, score in match.candidatos if score >= LIMIAR_AMBIGUO
+            ]
             return RespostaWorkflow1(
-                status="ambiguo", candidatos_ambiguo=match.candidatos,
+                status="ambiguo", candidatos_ambiguo=candidatos_acima_limiar,
                 tokens_embedding=tokens_embedding,
                 custo_embedding_usd=custo_embedding, custo_total_usd=custo_embedding,
             )
