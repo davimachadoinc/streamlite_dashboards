@@ -37,6 +37,19 @@ with st.sidebar:
         "testadas. Perguntas fora do catálogo oferecem solicitar ao BI ou tentar "
         "o Modo SQL Livre (sem garantia, sem revisão humana)."
     )
+    st.markdown("---")
+    st.markdown("**💡 Dica para evitar resposta errada**")
+    st.caption(
+        "Seja detalhista: quanto mais específico, menor a chance de má "
+        "interpretação.\n\n"
+        "- **Diga o período** (\"em julho\", \"últimos 90 dias\") em vez de deixar implícito\n"
+        "- **Diga o nome ou código da igreja/cliente**, não só \"essa igreja\"\n"
+        "- **Se souber de onde quer o dado, diga**: *\"cliente\"/\"contratado\" → "
+        "Superlógica (quem paga); *\"igreja\"/\"realmente ativo\"* → produto/Backend "
+        "(quem usa de verdade)\n\n"
+        "Quando a pergunta permitir mais de uma leitura, o assistente pergunta antes "
+        "de responder — mas quanto mais detalhe você já der, menos idas e vindas."
+    )
 
 st.markdown("<h1>Agente de <span>Informação</span></h1>", unsafe_allow_html=True)
 st.caption("Pergunte sobre clientes, MRR, TPV, churn, inadimplência, igrejas e mais.")
@@ -45,6 +58,16 @@ if "mensagens" not in st.session_state:
     st.session_state["mensagens"] = []
 if "pendente" not in st.session_state:
     st.session_state["pendente"] = None
+
+if not st.session_state["mensagens"] and not st.session_state["pendente"]:
+    st.info(
+        "💡 **Dica:** seja detalhista pra evitar má interpretação — diga o período "
+        "(\"em julho\"), o nome/código da igreja ou cliente, e se souber, de onde "
+        "quer o dado (*\"cliente\"* = Superlógica/quem paga; *\"igreja\"/\"ativo de "
+        "verdade\"* = produto/Backend/quem usa). Quando a pergunta permitir mais de "
+        "uma leitura, eu pergunto antes de responder.",
+        icon="💡",
+    )
 
 
 def _parse_valor(texto: str, tipo: str):
