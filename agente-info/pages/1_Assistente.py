@@ -4,6 +4,7 @@ Interface conversacional do Dashboard Agente de Informação.
 Workflow 1 (modo catálogo) + Workflow 2 (sem-match, solicitar ao BI, Modo
 SQL Livre com guardrails). Ver [BI] Dashboard_Agente_Informacao.md.
 """
+import io
 from datetime import datetime
 
 import pandas as pd
@@ -152,7 +153,25 @@ def _grafico_serie_12m(df_serie: pd.DataFrame, saida_kpi: list[str]):
     return fig
 
 
-def _renderizar_resultado(r):
+def _df_para_xlsx(df: pd.DataFrame) -> bytes:
+    """Serializa o DataFrame pra bytes de .xlsx (pedido do usuário: baixar tabelas em Excel)."""
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="dados")
+    return buffer.getvalue()
+
+
+def _botao_download_xlsx(df: pd.DataFrame, key: str, nome_arquivo: str = "dados.xlsx"):
+    st.download_button(
+        "⬇️ Baixar em Excel (.xlsx)",
+        data=_df_para_xlsx(df),
+        file_name=nome_arquivo,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key,
+    )
+
+
+def _renderizar_resultado(r, key: str):
     if r.status == "respondida":
         st.markdown(r.texto)
         if r.df_serie is not None and not r.df_serie.empty:
@@ -162,6 +181,7 @@ def _renderizar_resultado(r):
         if r.df is not None and not r.df.empty and len(r.df) > 1:
             with st.expander(f"Ver dados completos ({len(r.df)} linhas)"):
                 st.dataframe(r.df, use_container_width=True)
+                _botao_download_xlsx(r.df, key=f"xlsx_{key}", nome_arquivo=f"{r.entry.id}.xlsx")
         st.caption(
             f"📊 Fonte dos dados: **{r.fonte_dados}** · consulta [{r.entry.id}] {r.entry.titulo} "
             f"· custo ${r.custo_total_usd:.6f}"
@@ -172,7 +192,7 @@ def _renderizar_resultado(r):
         st.error(f"⚠️ Erro ao executar: {r.erro}")
 
 
-def _renderizar_sql_livre(resultado, custo_total: float):
+def _renderizar_sql_livre(resultado, custo_total: float, key: str):
     st.warning(
         "⚠️ **Resposta gerada por IA, sem revisão humana.** Este dado pode estar "
         "incorreto. Se for usar isso para decisão de negócio, peça verificação "
@@ -182,6 +202,7 @@ def _renderizar_sql_livre(resultado, custo_total: float):
         st.code(resultado.sql, language="sql")
     if resultado.status == "ok":
         st.dataframe(resultado.df, use_container_width=True)
+        _botao_download_xlsx(resultado.df, key=f"xlsx_{key}", nome_arquivo="sql_livre.xlsx")
         st.caption(
             f"{len(resultado.df)} linha(s) (prévia limitada) · "
             f"{resultado.bytes_processed / 2**20:.1f} MB processados · custo ${custo_total:.6f}"
@@ -194,12 +215,12 @@ def _renderizar_sql_livre(resultado, custo_total: float):
         st.error(f"⚠️ Erro ao executar: {resultado.motivo}")
 
 
-for msg in st.session_state["mensagens"]:
+for i, msg in enumerate(st.session_state["mensagens"]):
     with st.chat_message(msg["role"]):
         if msg["role"] == "assistant" and "resultado" in msg:
-            _renderizar_resultado(msg["resultado"])
+            _renderizar_resultado(msg["resultado"], key=str(i))
         elif msg["role"] == "assistant" and "sql_livre" in msg:
-            _renderizar_sql_livre(msg["sql_livre"], msg.get("custo_total", 0.0))
+            _renderizar_sql_livre(msg["sql_livre"], msg.get("custo_total", 0.0), key=str(i))
         else:
             st.markdown(msg["content"])
 
