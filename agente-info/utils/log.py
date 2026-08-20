@@ -51,8 +51,18 @@ _MODO_POR_STATUS = {
 }
 
 
-def registrar_uso(pergunta_raw: str, colaborador: str, r: RespostaWorkflow1) -> None:
-    """Workflow 1 (modo catalogo)."""
+def registrar_uso(
+    pergunta_raw: str, colaborador: str, r: RespostaWorkflow1,
+    qtd_perguntas_esclarecimento: int = 0,
+) -> None:
+    """
+    Workflow 1 (modo catalogo). qtd_perguntas_esclarecimento: quantas
+    perguntas o mecanismo de esclarecimento (ADR-015) fez antes de chegar
+    nesse resultado -- 0 quando nem entrou nesse fluxo. O custo dessas
+    perguntas ja deve estar somado em r.custo_embedding_usd/custo_llm_usd
+    pelo chamador antes de logar (nao rateado, atribuido todo a pergunta
+    inicial, pedido explicito do usuario).
+    """
     _inserir_linha({
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "colaborador": colaborador,
@@ -75,6 +85,7 @@ def registrar_uso(pergunta_raw: str, colaborador: str, r: RespostaWorkflow1) -> 
         "custo_llm_usd": r.custo_llm_usd,
         "custo_bq_usd": r.custo_bq_usd,
         "custo_total_estimado_usd": r.custo_total_usd,
+        "qtd_perguntas_esclarecimento": qtd_perguntas_esclarecimento,
     })
 
 
