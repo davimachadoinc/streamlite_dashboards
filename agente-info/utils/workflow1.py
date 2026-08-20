@@ -73,7 +73,7 @@ def responder(
     """
     if entry_id_escolhido:
         from utils.matching import carregar_catalogo
-        entries, _ = carregar_catalogo()
+        entries = carregar_catalogo()
         entry = next((e for e in entries if e.id == entry_id_escolhido), None)
         if entry is None:
             return RespostaWorkflow1(status="erro", erro=f"Entrada '{entry_id_escolhido}' nao encontrada.")
@@ -158,7 +158,7 @@ def responder(
     df_serie = None
     if entry.serie_historica_id:
         from utils.matching import carregar_catalogo
-        entries, _ = carregar_catalogo()
+        entries = carregar_catalogo()
         entry_serie = next((e for e in entries if e.id == entry.serie_historica_id), None)
         if entry_serie and entry_serie.sql_template:
             try:
