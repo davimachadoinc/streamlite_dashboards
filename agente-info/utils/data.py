@@ -71,7 +71,7 @@ def _resolver_default(spec: dict):
             return _mes_atual()
         if regra == "mes_anterior":
             return _mes_anterior()
-        if regra == "serie_completa":
+        if regra in ("serie_completa", "sem_filtro"):
             return None  # SQL do template trata NULL como "sem filtro" explicitamente
     if "default" in spec:
         return spec["default"]
