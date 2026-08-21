@@ -67,10 +67,18 @@ _TIPO_JSON = {
 }
 
 
+# Parametros que representam um identificador de cliente/igreja -- quando um
+# deles falta, extrair_parametros() tambem tenta capturar o NOME que o
+# usuario mencionou em vez do codigo (ver utils/resolucao_cliente.py, pedido
+# do usuario 2026-08-21: resolver nome -> ID automaticamente).
+PARAMS_ENTIDADE = {"id_cliente", "codigo_igreja"}
+
+
 @dataclass
 class ExtracaoParametros:
     valores: dict           # nome -> valor (None se nao encontrado na pergunta)
     faltando_obrigatorio: list[str] = field(default_factory=list)
+    nome_mencionado: str | None = None
     modelo: str = ""
     tokens_input: int = 0
     tokens_output: int = 0
@@ -89,6 +97,7 @@ def extrair_parametros(pergunta: str, parametros_spec: dict) -> ExtracaoParametr
 
     properties = {}
     required = []
+    pede_entidade = any(nome in PARAMS_ENTIDADE for nome in parametros_spec)
     for nome, spec in parametros_spec.items():
         tipo = _TIPO_JSON.get(str(spec.get("tipo", "string")).lower(), "string")
         properties[nome] = {
@@ -100,6 +109,22 @@ def extrair_parametros(pergunta: str, parametros_spec: dict) -> ExtracaoParametr
         required.append(nome)  # todos required no schema; null = "nao encontrado"
         if spec.get("obrigatorio", True):
             pass  # tratado depois de extrair, checando quais vieram null
+
+    if pede_entidade:
+        properties["nome_mencionado"] = {
+            "type": ["string", "null"],
+            "description": (
+                "Se o usuario mencionou um NOME de cliente/igreja em vez de um codigo "
+                "numerico, coloque aqui APENAS o nome proprio/distintivo, sem palavras "
+                "genericas descritoras como 'igreja', 'cliente', 'comunidade' quando "
+                "usadas como descritor antes do nome (ex: da pergunta 'a igreja sara "
+                "nossa terra' extraia so 'sara nossa terra', nao 'igreja sara nossa "
+                "terra' -- mas mantenha a palavra quando for parte do nome formal, ex: "
+                "'Primeira Igreja Presbiteriana de Curitiba' fica como esta). Se nao "
+                "mencionou nome nenhum, null."
+            ),
+        }
+        required.append("nome_mencionado")
 
     schema = {
         "type": "object",
@@ -129,6 +154,7 @@ def extrair_parametros(pergunta: str, parametros_spec: dict) -> ExtracaoParametr
     )
 
     valores = json.loads(resp.choices[0].message.content)
+    nome_mencionado = valores.pop("nome_mencionado", None)
     faltando = [
         nome for nome, spec in parametros_spec.items()
         if spec.get("obrigatorio", True) and valores.get(nome) is None
@@ -137,6 +163,7 @@ def extrair_parametros(pergunta: str, parametros_spec: dict) -> ExtracaoParametr
     return ExtracaoParametros(
         valores=valores,
         faltando_obrigatorio=faltando,
+        nome_mencionado=nome_mencionado,
         modelo=MODELO_WORKFLOW1,
         tokens_input=tin,
         tokens_output=tout,
