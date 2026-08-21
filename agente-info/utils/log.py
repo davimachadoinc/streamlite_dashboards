@@ -46,6 +46,7 @@ _MODO_POR_STATUS = {
     "sem_match": "sem_match",
     "ambiguo": "sem_match",
     "faltando_parametro": "catalogo",
+    "cliente_nao_encontrado": "catalogo",
     "sem_sql_template": "sem_match",
     "erro": "catalogo",
 }

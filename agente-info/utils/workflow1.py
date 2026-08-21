@@ -40,7 +40,7 @@ def identificar_fontes(sql: str | None) -> str:
 
 @dataclass
 class RespostaWorkflow1:
-    status: Literal["respondida", "faltando_parametro", "ambiguo", "sem_match", "sem_sql_template", "erro"]
+    status: Literal["respondida", "faltando_parametro", "cliente_nao_encontrado", "ambiguo", "sem_match", "sem_sql_template", "erro"]
     texto: str | None = None
     df: pd.DataFrame | None = None
     df_serie: pd.DataFrame | None = None
@@ -200,10 +200,13 @@ def responder(
         candidatos = buscar_por_nome(extracao.nome_mencionado)
 
         if len(candidatos) == 0:
+            # Pedido do usuario 2026-08-21: nao e um erro terminal -- pede o
+            # codigo local da igreja pra tentar de novo, sem travar a conversa.
             return RespostaWorkflow1(
-                status="erro",
-                erro=f"Não encontrei nenhum cliente ativo com o nome '{extracao.nome_mencionado}' no Superlógica. Tenta um nome diferente ou o código da igreja.",
+                status="cliente_nao_encontrado",
+                erro=f"Não encontrei nenhum cliente ativo com o nome '{extracao.nome_mencionado}' no Superlógica.",
                 entry=entry,
+                parametros_faltando=[param_entidade],
                 tokens_embedding=tokens_embedding, tokens_llm_input=extracao.tokens_input, tokens_llm_output=extracao.tokens_output,
                 custo_embedding_usd=custo_embedding, custo_llm_usd=custo_extracao,
                 custo_total_usd=custo_embedding + custo_extracao,

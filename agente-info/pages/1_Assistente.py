@@ -90,6 +90,134 @@ def _somar_custo_esclarecimento(r, pend: dict) -> None:
     r.custo_total_usd += pend.get("custo_embedding_acumulado", 0.0) + pend.get("custo_llm_acumulado", 0.0)
 
 
+def _log_abandono_esclarecimento(pend: dict | None) -> None:
+    """
+    Contabiliza o custo das rodadas ja gastas quando um esclarecimento/
+    ambiguidade em andamento e abandonado (usuario digita pergunta nova na
+    caixa principal, ou clica em recomecar) -- nunca perde o rastro do gasto.
+    """
+    if pend and pend.get("tipo") in ("esclarecimento", "ambiguo") and pend.get("rodada"):
+        r_abandonado = RespostaWorkflow1(status="sem_match")
+        _somar_custo_esclarecimento(r_abandonado, pend)
+        registrar_uso(
+            pend["pergunta_original"], st.user.email, r_abandonado,
+            qtd_perguntas_esclarecimento=pend["rodada"],
+        )
+
+
+def _processar_resposta_esclarecimento(pend: dict, resposta: str) -> None:
+    """
+    Roda 1 rodada do mecanismo de esclarecimento dada a resposta do usuario
+    (via botao de opcao ou texto livre) -- pedido do usuario 2026-08-21: a
+    caixa principal nunca serve pra isso, so botoes/campo inline dedicado.
+    """
+    st.session_state["mensagens"].append({"role": "user", "content": resposta})
+    historico = pend["historico"] + [ParEsclarecimento(pergunta=pend["pergunta_llm_atual"], resposta=resposta)]
+    with st.spinner("🤔 Pensando..."):
+        reavaliacao = reavaliar(pend["pergunta_original"], historico)
+
+    tokens_embedding_acumulado = pend["tokens_embedding_acumulado"] + reavaliacao.tokens_embedding
+    custo_embedding_acumulado = pend["custo_embedding_acumulado"] + reavaliacao.custo_embedding_usd
+
+    # Criterio de resolucao = ESTABILIDADE, nao score absoluto (ver
+    # utils/esclarecimento.py): resolve quando o candidato do topo repete na
+    # rodada seguinte, sinal de que mais uma resposta nao mudou a classificacao.
+    top_atual = reavaliacao.top
+    top_atual_id = top_atual[0].id if top_atual else None
+    estabilizou = top_atual_id is not None and top_atual_id == pend.get("top_id_anterior")
+
+    if estabilizou:
+        with st.spinner("🤔 Pensando..."):
+            r = responder(pend["pergunta_original"], entry_id_escolhido=top_atual_id)
+        pend_para_custo = {
+            **pend,
+            "tokens_embedding_acumulado": tokens_embedding_acumulado,
+            "custo_embedding_acumulado": custo_embedding_acumulado,
+        }
+        _somar_custo_esclarecimento(r, pend_para_custo)
+        registrar_uso(pend["pergunta_original"], st.user.email, r, qtd_perguntas_esclarecimento=pend["rodada"])
+        st.session_state["mensagens"].append({"role": "assistant", "content": r.texto or "", "resultado": r})
+        st.session_state["pendente"] = None
+    elif pend["rodada"] >= MAX_RODADAS_ESCLARECIMENTO:
+        # esgotou as rodadas sem estabilizar -- cai no fallback de botoes,
+        # carregando o custo acumulado pra ser logado quando o usuario decidir
+        st.session_state["pendente"] = {
+            "tipo": "ambiguo",
+            "pergunta_original": pend["pergunta_original"],
+            "candidatos": reavaliacao.candidatos or pend["candidatos_atual"],
+            "rodada": pend["rodada"],
+            "tokens_embedding_acumulado": tokens_embedding_acumulado,
+            "tokens_llm_input_acumulado": pend["tokens_llm_input_acumulado"],
+            "tokens_llm_output_acumulado": pend["tokens_llm_output_acumulado"],
+            "custo_embedding_acumulado": custo_embedding_acumulado,
+            "custo_llm_acumulado": pend["custo_llm_acumulado"],
+        }
+    else:
+        with st.spinner("🤔 Pensando..."):
+            proxima = gerar_pergunta_esclarecimento(
+                pend["pergunta_original"], historico, reavaliacao.candidatos or pend["candidatos_atual"],
+            )
+        st.session_state["pendente"] = {
+            "tipo": "esclarecimento",
+            "pergunta_original": pend["pergunta_original"],
+            "historico": historico,
+            "rodada": pend["rodada"] + 1,
+            "pergunta_llm_atual": proxima.texto,
+            "opcoes": proxima.opcoes,
+            "candidatos_atual": reavaliacao.candidatos or pend["candidatos_atual"],
+            "top_id_anterior": top_atual_id,
+            "tokens_embedding_acumulado": tokens_embedding_acumulado,
+            "tokens_llm_input_acumulado": pend["tokens_llm_input_acumulado"] + proxima.tokens_input,
+            "tokens_llm_output_acumulado": pend["tokens_llm_output_acumulado"] + proxima.tokens_output,
+            "custo_embedding_acumulado": custo_embedding_acumulado,
+            "custo_llm_acumulado": pend["custo_llm_acumulado"] + proxima.custo_usd,
+        }
+    st.rerun()
+
+
+def _processar_faltando_parametro(pend: dict, valor_texto: str) -> None:
+    st.session_state["mensagens"].append({"role": "user", "content": valor_texto})
+    faltando = pend["faltando"][0]
+    tipo = pend["entry"].parametros.get(faltando, {}).get("tipo", "string")
+    valor = _parse_valor(valor_texto, tipo)
+    with st.spinner("🤔 Pensando..."):
+        r = responder(pend["pergunta_original"], parametros_confirmados={faltando: valor})
+    registrar_uso(pend["pergunta_original"], st.user.email, r)
+    if r.status == "faltando_parametro":
+        st.session_state["pendente"] = {
+            "tipo": "faltando_parametro", "pergunta_original": pend["pergunta_original"],
+            "entry": r.entry, "faltando": r.parametros_faltando,
+        }
+    elif r.status == "cliente_nao_encontrado":
+        st.session_state["pendente"] = {
+            "tipo": "cliente_nao_encontrado", "pergunta_original": pend["pergunta_original"],
+            "entry": r.entry, "param_entidade": r.parametros_faltando[0], "mensagem": r.erro,
+        }
+    else:
+        st.session_state["mensagens"].append({"role": "assistant", "content": r.texto or "", "resultado": r})
+        st.session_state["pendente"] = None
+    st.rerun()
+
+
+def _processar_cliente_nao_encontrado(pend: dict, codigo_texto: str) -> None:
+    st.session_state["mensagens"].append({"role": "user", "content": codigo_texto})
+    with st.spinner("🤔 Pensando..."):
+        r = responder(
+            pend["pergunta_original"], entry_id_escolhido=pend["entry"].id,
+            parametros_confirmados={pend["param_entidade"]: codigo_texto.strip()},
+        )
+    registrar_uso(pend["pergunta_original"], st.user.email, r)
+    if r.status == "cliente_nao_encontrado":
+        st.session_state["pendente"] = {
+            "tipo": "cliente_nao_encontrado", "pergunta_original": pend["pergunta_original"],
+            "entry": r.entry, "param_entidade": r.parametros_faltando[0], "mensagem": r.erro,
+        }
+    else:
+        st.session_state["mensagens"].append({"role": "assistant", "content": r.texto or "", "resultado": r})
+        st.session_state["pendente"] = None
+    st.rerun()
+
+
 def _parse_valor(texto: str, tipo: str):
     texto = texto.strip()
     try:
@@ -244,13 +372,7 @@ if pend and pend["tipo"] == "ambiguo":
                 st.session_state["pendente"] = None
                 st.rerun()
         if st.button("↩️ Nenhuma opção acima, recomeçar com uma explicação mais detalhada", key="amb_recomecar"):
-            if pend.get("rodada"):
-                r_abandonado = RespostaWorkflow1(status="sem_match")
-                _somar_custo_esclarecimento(r_abandonado, pend)
-                registrar_uso(
-                    pend["pergunta_original"], st.user.email, r_abandonado,
-                    qtd_perguntas_esclarecimento=pend["rodada"],
-                )
+            _log_abandono_esclarecimento(pend)
             st.session_state["mensagens"].append({
                 "role": "assistant",
                 "content": (
@@ -262,19 +384,48 @@ if pend and pend["tipo"] == "ambiguo":
             st.session_state["pendente"] = None
             st.rerun()
 
-# --- estado pendente: esclarecimento por perguntas (ADR-015) -- pergunta do
-# LLM fica visivel, resposta do usuario vem na proxima mensagem do chat ---
+# --- estado pendente: esclarecimento por perguntas (ADR-015) -- opcoes
+# viram botao clicavel (pedido do usuario 2026-08-21), com uma 3a opcao fixa
+# de texto livre pra quem nao se encaixa em nenhuma. A caixa principal NUNCA
+# responde isso -- so esse bloco inline. ---
 elif pend and pend["tipo"] == "esclarecimento":
     with st.chat_message("assistant"):
         st.markdown(pend["pergunta_llm_atual"])
         st.caption(f"Pergunta {pend['rodada']} de {MAX_RODADAS_ESCLARECIMENTO}, pra entender melhor o que você precisa.")
+        for i, opcao in enumerate(pend.get("opcoes", [])):
+            if st.button(opcao, key=f"esc_opcao_{pend['rodada']}_{i}", use_container_width=True):
+                _processar_resposta_esclarecimento(pend, opcao)
+        chave_livre = f"esc_modo_livre_{pend['rodada']}"
+        if st.button("✍️ Descrever com minhas próprias palavras", key=f"esc_livre_btn_{pend['rodada']}"):
+            st.session_state[chave_livre] = True
+        if st.session_state.get(chave_livre):
+            with st.form(key=f"esc_form_{pend['rodada']}", clear_on_submit=True):
+                resposta_livre = st.text_input("Sua resposta:")
+                if st.form_submit_button("Enviar") and resposta_livre.strip():
+                    _processar_resposta_esclarecimento(pend, resposta_livre.strip())
 
-# --- estado pendente: parametro faltando (pede na proxima mensagem) ---
+# --- estado pendente: parametro faltando -- pede inline, nao na caixa principal ---
 elif pend and pend["tipo"] == "faltando_parametro":
     with st.chat_message("assistant"):
         faltando = pend["faltando"][0]
         descricao = pend["entry"].parametros.get(faltando, {}).get("descricao", faltando)
         st.markdown(f"Preciso de mais uma informação: **{descricao}**")
+        with st.form(key="falta_param_form", clear_on_submit=True):
+            valor_digitado = st.text_input("Sua resposta:")
+            if st.form_submit_button("Enviar") and valor_digitado.strip():
+                _processar_faltando_parametro(pend, valor_digitado.strip())
+
+# --- estado pendente: nome do cliente nao bateu com nenhum registro ativo no
+# Superlogica (ADR-018 addendum, pedido do usuario 2026-08-21) -- nao e
+# terminal, pede o codigo local da igreja pra tentar de novo ---
+elif pend and pend["tipo"] == "cliente_nao_encontrado":
+    with st.chat_message("assistant"):
+        st.warning(pend["mensagem"])
+        st.markdown("Me diz o **código local da igreja** (o número que aparece no backend) que eu busco direto.")
+        with st.form(key="cliente_nao_encontrado_form", clear_on_submit=True):
+            codigo_digitado = st.text_input("Código da igreja:")
+            if st.form_submit_button("Enviar") and codigo_digitado.strip():
+                _processar_cliente_nao_encontrado(pend, codigo_digitado.strip())
 
 # --- estado pendente: sem-match, escolher entre solicitar ao BI ou tentar SQL Livre ---
 elif pend and pend["tipo"] == "sem_match_escolha":
@@ -342,127 +493,62 @@ elif pend and pend["tipo"] == "sql_livre_confirmar":
 
 pergunta = st.chat_input("Digite sua pergunta...")
 
+# A caixa principal e SEMPRE pergunta nova (pedido do usuario 2026-08-21) --
+# nunca serve pra responder um pendente em aberto (esclarecimento, parametro
+# faltando etc). Se havia algo pendente com custo ja gasto, contabiliza como
+# abandonado antes de comecar do zero.
 if pergunta:
+    _log_abandono_esclarecimento(pend)
+    st.session_state["pendente"] = None
     st.session_state["mensagens"].append({"role": "user", "content": pergunta})
 
-    if pend and pend["tipo"] == "faltando_parametro":
-        faltando = pend["faltando"][0]
-        tipo = pend["entry"].parametros.get(faltando, {}).get("tipo", "string")
-        valor = _parse_valor(pergunta, tipo)
+    with st.spinner("🤔 Pensando..."):
+        r = responder(pergunta)
+    if r.status == "ambiguo":
+        # Pedido do usuario 2026-08-20: antes de mostrar os botoes, tenta
+        # resolver com ate 5 perguntas de esclarecimento em linguagem de
+        # negocio (ver utils/esclarecimento.py, ADR-015).
         with st.spinner("🤔 Pensando..."):
-            r = responder(pend["pergunta_original"], parametros_confirmados={faltando: valor})
-        pergunta_para_log = pend["pergunta_original"]
-        st.session_state["pendente"] = None
-        registrar_uso(pergunta_para_log, st.user.email, r)
+            primeira = gerar_pergunta_esclarecimento(pergunta, [], r.candidatos_ambiguo)
+        st.session_state["pendente"] = {
+            "tipo": "esclarecimento",
+            "pergunta_original": pergunta,
+            "historico": [],
+            "rodada": 1,
+            "pergunta_llm_atual": primeira.texto,
+            "opcoes": primeira.opcoes,
+            "candidatos_atual": r.candidatos_ambiguo,
+            # None de proposito (nao o top pre-pergunta): estabilidade so
+            # deve comparar resposta contra resposta -- a rodada 1 nunca
+            # resolve sozinha, sempre pede pelo menos 1 confirmacao real
+            # (bug encontrado em teste 2026-08-20: comparar contra o
+            # palpite inicial sem nenhuma resposta gerava falso positivo).
+            "top_id_anterior": None,
+            "tokens_embedding_acumulado": r.tokens_embedding,
+            "tokens_llm_input_acumulado": primeira.tokens_input,
+            "tokens_llm_output_acumulado": primeira.tokens_output,
+            "custo_embedding_acumulado": r.custo_embedding_usd,
+            "custo_llm_acumulado": primeira.custo_usd,
+        }
+        st.rerun()
+    elif r.status == "faltando_parametro":
+        st.session_state["pendente"] = {
+            "tipo": "faltando_parametro", "pergunta_original": pergunta,
+            "entry": r.entry, "faltando": r.parametros_faltando,
+        }
+        st.rerun()
+    elif r.status == "cliente_nao_encontrado":
+        st.session_state["pendente"] = {
+            "tipo": "cliente_nao_encontrado", "pergunta_original": pergunta,
+            "entry": r.entry, "param_entidade": r.parametros_faltando[0], "mensagem": r.erro,
+        }
+        registrar_uso(pergunta, st.user.email, r)
+        st.rerun()
+    elif r.status == "sem_match":
+        st.session_state["pendente"] = {"tipo": "sem_match_escolha", "pergunta_original": pergunta}
+        registrar_uso(pergunta, st.user.email, r)
+        st.rerun()
+    else:
+        registrar_uso(pergunta, st.user.email, r)
         st.session_state["mensagens"].append({"role": "assistant", "content": r.texto or "", "resultado": r})
         st.rerun()
-
-    # --- resposta do usuario a 1 rodada do mecanismo de esclarecimento (ADR-015) ---
-    elif pend and pend["tipo"] == "esclarecimento":
-        historico = pend["historico"] + [ParEsclarecimento(pergunta=pend["pergunta_llm_atual"], resposta=pergunta)]
-        with st.spinner("🤔 Pensando..."):
-            reavaliacao = reavaliar(pend["pergunta_original"], historico)
-
-        tokens_embedding_acumulado = pend["tokens_embedding_acumulado"] + reavaliacao.tokens_embedding
-        custo_embedding_acumulado = pend["custo_embedding_acumulado"] + reavaliacao.custo_embedding_usd
-
-        # Criterio de resolucao = ESTABILIDADE, nao score absoluto (ver
-        # utils/esclarecimento.py): resolve quando o candidato do topo se
-        # repete na rodada seguinte, sinal de que mais uma resposta nao
-        # mudou a classificacao.
-        top_atual = reavaliacao.top
-        top_atual_id = top_atual[0].id if top_atual else None
-        estabilizou = top_atual_id is not None and top_atual_id == pend.get("top_id_anterior")
-
-        if estabilizou:
-            with st.spinner("🤔 Pensando..."):
-                r = responder(pend["pergunta_original"], entry_id_escolhido=top_atual_id)
-            pend_para_custo = {
-                **pend,
-                "tokens_embedding_acumulado": tokens_embedding_acumulado,
-                "custo_embedding_acumulado": custo_embedding_acumulado,
-            }
-            _somar_custo_esclarecimento(r, pend_para_custo)
-            registrar_uso(pend["pergunta_original"], st.user.email, r, qtd_perguntas_esclarecimento=pend["rodada"])
-            st.session_state["mensagens"].append({"role": "assistant", "content": r.texto or "", "resultado": r})
-            st.session_state["pendente"] = None
-            st.rerun()
-        elif pend["rodada"] >= MAX_RODADAS_ESCLARECIMENTO:
-            # esgotou as rodadas sem bater o limiar -- cai no fallback de botoes,
-            # carregando o custo acumulado pra ser logado quando o usuario decidir
-            st.session_state["pendente"] = {
-                "tipo": "ambiguo",
-                "pergunta_original": pend["pergunta_original"],
-                "candidatos": reavaliacao.candidatos or pend["candidatos_atual"],
-                "rodada": pend["rodada"],
-                "tokens_embedding_acumulado": tokens_embedding_acumulado,
-                "tokens_llm_input_acumulado": pend["tokens_llm_input_acumulado"],
-                "tokens_llm_output_acumulado": pend["tokens_llm_output_acumulado"],
-                "custo_embedding_acumulado": custo_embedding_acumulado,
-                "custo_llm_acumulado": pend["custo_llm_acumulado"],
-            }
-            st.rerun()
-        else:
-            with st.spinner("🤔 Pensando..."):
-                proxima = gerar_pergunta_esclarecimento(
-                    pend["pergunta_original"], historico, reavaliacao.candidatos or pend["candidatos_atual"],
-                )
-            st.session_state["pendente"] = {
-                "tipo": "esclarecimento",
-                "pergunta_original": pend["pergunta_original"],
-                "historico": historico,
-                "rodada": pend["rodada"] + 1,
-                "pergunta_llm_atual": proxima.texto,
-                "candidatos_atual": reavaliacao.candidatos or pend["candidatos_atual"],
-                "top_id_anterior": top_atual_id,
-                "tokens_embedding_acumulado": tokens_embedding_acumulado,
-                "tokens_llm_input_acumulado": pend["tokens_llm_input_acumulado"] + proxima.tokens_input,
-                "tokens_llm_output_acumulado": pend["tokens_llm_output_acumulado"] + proxima.tokens_output,
-                "custo_embedding_acumulado": custo_embedding_acumulado,
-                "custo_llm_acumulado": pend["custo_llm_acumulado"] + proxima.custo_usd,
-            }
-            st.rerun()
-
-    else:
-        with st.spinner("🤔 Pensando..."):
-            r = responder(pergunta)
-        if r.status == "ambiguo":
-            # Pedido do usuario 2026-08-20: antes de mostrar os botoes, tenta
-            # resolver com ate 5 perguntas de esclarecimento em linguagem de
-            # negocio (ver utils/esclarecimento.py, ADR-015).
-            with st.spinner("🤔 Pensando..."):
-                primeira = gerar_pergunta_esclarecimento(pergunta, [], r.candidatos_ambiguo)
-            st.session_state["pendente"] = {
-                "tipo": "esclarecimento",
-                "pergunta_original": pergunta,
-                "historico": [],
-                "rodada": 1,
-                "pergunta_llm_atual": primeira.texto,
-                "candidatos_atual": r.candidatos_ambiguo,
-                # None de proposito (nao o top pre-pergunta): estabilidade so
-                # deve comparar resposta contra resposta -- a rodada 1 nunca
-                # resolve sozinha, sempre pede pelo menos 1 confirmacao real
-                # (bug encontrado em teste 2026-08-20: comparar contra o
-                # palpite inicial sem nenhuma resposta gerava falso positivo).
-                "top_id_anterior": None,
-                "tokens_embedding_acumulado": r.tokens_embedding,
-                "tokens_llm_input_acumulado": primeira.tokens_input,
-                "tokens_llm_output_acumulado": primeira.tokens_output,
-                "custo_embedding_acumulado": r.custo_embedding_usd,
-                "custo_llm_acumulado": primeira.custo_usd,
-            }
-            st.rerun()
-        elif r.status == "faltando_parametro":
-            st.session_state["pendente"] = {
-                "tipo": "faltando_parametro", "pergunta_original": pergunta,
-                "entry": r.entry, "faltando": r.parametros_faltando,
-            }
-            st.rerun()
-        elif r.status == "sem_match":
-            st.session_state["pendente"] = {"tipo": "sem_match_escolha", "pergunta_original": pergunta}
-            registrar_uso(pergunta, st.user.email, r)
-            st.rerun()
-        else:
-            registrar_uso(pergunta, st.user.email, r)
-            st.session_state["mensagens"].append({"role": "assistant", "content": r.texto or "", "resultado": r})
-            st.rerun()

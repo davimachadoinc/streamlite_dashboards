@@ -24,7 +24,8 @@ algumas chamadas de LLM barato por pergunta ambigua.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 
 import streamlit as st
 from openai import OpenAI
@@ -49,9 +50,10 @@ class ParEsclarecimento:
 @dataclass
 class PerguntaGerada:
     texto: str
-    tokens_input: int
-    tokens_output: int
-    custo_usd: float
+    opcoes: list[str] = field(default_factory=list)
+    tokens_input: int = 0
+    tokens_output: int = 0
+    custo_usd: float = 0.0
 
 
 @dataclass
@@ -93,9 +95,12 @@ def gerar_pergunta_esclarecimento(
     candidatos: list[tuple[CatalogEntry, float]],
 ) -> PerguntaGerada:
     """
-    Gera 1 pergunta curta, em linguagem de negocio (nao tecnica), que ajude a
-    diferenciar entre os candidatos ainda em jogo. Nunca repete uma pergunta
-    ja feita no historico.
+    Gera 1 pergunta curta, em linguagem de negocio (nao tecnica), mais de 2 a
+    4 opcoes de resposta curtas e clicaveis (pedido do usuario 2026-08-21:
+    botao em vez de texto livre sempre que der pra oferecer opcoes concretas
+    -- o campo de digitar fica so pra quem clicar em "descrever com minhas
+    proprias palavras", ver pages/1_Assistente.py). Nunca repete uma
+    pergunta ja feita no historico.
     """
     candidatos_texto = "\n".join(
         f"- [{entry.id}] {entry.titulo} (fonte: {entry.fonte}) -- exemplos: "
@@ -107,6 +112,33 @@ def gerar_pergunta_esclarecimento(
         if historico else "(nenhuma pergunta feita ainda)"
     )
 
+    schema = {
+        "type": "object",
+        "properties": {
+            "pergunta": {
+                "type": "string",
+                "description": (
+                    "Pergunta curta e objetiva, em portugues, em LINGUAGEM DE NEGOCIO "
+                    "(nunca cite nomes tecnicos de tabela, campo, ID de consulta ou "
+                    "jargao de banco de dados)."
+                ),
+            },
+            "opcoes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Entre 2 e 4 respostas curtas e concretas (poucas palavras cada), "
+                    "prontas pra virar botao clicavel, cobrindo as leituras mais "
+                    "plausiveis entre os candidatos. Nunca inclua uma opcao de "
+                    "'descrever com minhas palavras' aqui -- essa ja existe fixa na "
+                    "interface."
+                ),
+            },
+        },
+        "required": ["pergunta", "opcoes"],
+        "additionalProperties": False,
+    }
+
     resp = _openai_client().chat.completions.create(
         model=MODELO_WORKFLOW1,
         messages=[
@@ -116,12 +148,10 @@ def gerar_pergunta_esclarecimento(
                     "Voce ajuda a desambiguar uma pergunta de BI da InChurch antes de "
                     "responde-la. Existem varias consultas candidatas no catalogo que "
                     "poderiam responder a pergunta do usuario, e voce precisa descobrir "
-                    "qual delas e a certa. Gere UMA pergunta curta e objetiva, em "
-                    "portugues, em LINGUAGEM DE NEGOCIO (nunca cite nomes tecnicos de "
-                    "tabela, campo, ID de consulta ou jargao de banco de dados) que ajude "
-                    "a diferenciar entre os candidatos abaixo. Nunca repita uma pergunta "
-                    "que ja foi feita no historico. Responda so com o texto da pergunta, "
-                    "sem aspas, sem numeracao, sem explicacao adicional."
+                    "qual delas e a certa. Gere uma pergunta curta e objetiva, em "
+                    "LINGUAGEM DE NEGOCIO, mais de 2 a 4 opcoes de resposta curtas e "
+                    "clicaveis que ajudem a diferenciar entre os candidatos abaixo. "
+                    "Nunca repita uma pergunta que ja foi feita no historico."
                 ),
             },
             {
@@ -133,11 +163,16 @@ def gerar_pergunta_esclarecimento(
                 ),
             },
         ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "esclarecimento", "schema": schema, "strict": True},
+        },
     )
-    texto = resp.choices[0].message.content.strip()
+    dados = json.loads(resp.choices[0].message.content)
     tin, tout = resp.usage.prompt_tokens, resp.usage.completion_tokens
     return PerguntaGerada(
-        texto=texto,
+        texto=dados["pergunta"].strip(),
+        opcoes=[o.strip() for o in dados.get("opcoes", []) if o and o.strip()],
         tokens_input=tin,
         tokens_output=tout,
         custo_usd=custo_usd(MODELO_WORKFLOW1, tin, tout),
