@@ -268,14 +268,16 @@ def transition_summary(transitions: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     order = [label for _, _, label in TRANSITION_PAIRS]
     g = transitions.groupby("pair")["dias"]
-    out = g.agg(
-        leads="count",
-        media_dias="mean",
-        mediana_dias="median",
-        p25_dias=lambda s: s.quantile(0.25),
-        p75_dias=lambda s: s.quantile(0.75),
-        p95_dias=lambda s: s.quantile(0.95),
-    ).reindex(order).dropna(how="all").reset_index()
+    out = pd.DataFrame({
+        "leads": g.count(),
+        "media_dias": g.mean(),
+        "mediana_dias": g.median(),
+        "p25_dias": g.quantile(0.25),
+        "p75_dias": g.quantile(0.75),
+        "p95_dias": g.quantile(0.95),
+    })
+    out.index.name = "pair"
+    out = out.reindex(order).dropna(how="all").reset_index()
     return out
 
 
@@ -379,10 +381,12 @@ def time_to_contact_by_weekday(df: pd.DataFrame) -> pd.DataFrame:
     primeiro_contato["dia_semana"] = primeiro_contato["transition_timestamp"].dt.dayofweek.map(
         dict(enumerate(WEEKDAYS_PT))
     )
-    out = (
-        primeiro_contato.groupby("dia_semana")["horas"]
-        .agg(leads="count", media_horas="mean", mediana_horas="median")
-        .reindex(WEEKDAYS_PT)
-        .reset_index()
-    )
+    grp = primeiro_contato.groupby("dia_semana")["horas"]
+    out = pd.DataFrame({
+        "leads": grp.count(),
+        "media_horas": grp.mean(),
+        "mediana_horas": grp.median(),
+    })
+    out.index.name = "dia_semana"
+    out = out.reindex(WEEKDAYS_PT).reset_index()
     return out

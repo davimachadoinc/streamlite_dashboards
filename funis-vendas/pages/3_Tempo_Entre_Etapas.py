@@ -216,9 +216,15 @@ aging = aging_em_aberto(dfv)
 if aging.empty:
     st.info("Nenhum lead em aberto no recorte atual.")
 else:
+    grp_aging = aging.groupby("stage_name")["dias_parado"]
+    resumo_aging = pd.DataFrame({
+        "leads": grp_aging.count(),
+        "mediana": grp_aging.median(),
+        "media": grp_aging.mean(),
+    })
+    resumo_aging.index.name = "stage_name"
     resumo_aging = (
-        aging.groupby("stage_name")["dias_parado"]
-        .agg(leads="count", mediana="median", media="mean")
+        resumo_aging
         .reindex(["Entrada", "Tentando Contato", "Em Contato", "Reunião Agendada"])
         .dropna(how="all")
         .reset_index()
