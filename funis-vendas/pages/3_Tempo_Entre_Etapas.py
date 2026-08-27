@@ -105,15 +105,20 @@ if transitions.empty:
     st.stop()
 
 # ── Tabela resumo ────────────────────────────────
-st.markdown("### 📊 Média, Mediana e Percentis por Transição (dias)")
+st.markdown("### 📊 Média, Mediana e Percentis por Transição (minutos)")
 summary = transition_summary(transitions)
+summary_min = summary.copy()
+for col in ["media_dias", "mediana_dias", "p25_dias", "p75_dias", "p95_dias"]:
+    summary_min[col] = summary_min[col] * 24 * 60
+
+_fmt_min = lambda v: f"{v:,.0f}".replace(",", ".")
 st.dataframe(
-    summary.rename(columns={
+    summary_min.rename(columns={
         "pair": "Transição", "leads": "Leads",
         "media_dias": "Média", "mediana_dias": "Mediana",
         "p25_dias": "P25", "p75_dias": "P75", "p95_dias": "P95",
     }).style.format({
-        "Média": "{:.1f}", "Mediana": "{:.1f}", "P25": "{:.1f}", "P75": "{:.1f}", "P95": "{:.1f}",
+        "Média": _fmt_min, "Mediana": _fmt_min, "P25": _fmt_min, "P75": _fmt_min, "P95": _fmt_min,
     }),
     use_container_width=True,
     hide_index=True,
@@ -247,8 +252,13 @@ if wd.empty:
     st.info("Sem dados suficientes para essa análise no recorte atual.")
 else:
     fig_wd = go.Figure(go.Bar(
-        x=wd["dia_semana"], y=wd["mediana_horas"],
+        x=wd["dia_semana"], y=wd["media_horas"],
         marker_color=PALETTE_GREEN,
+        text=[f"{v:.1f}h" for v in wd["media_horas"]],
+        textposition="outside",
+        customdata=wd[["leads", "mediana_horas"]],
+        hovertemplate="<b>%{x}</b><br>Média: %{y:.1f}h<br>Mediana: %{customdata[1]:.2f}h"
+                      "<br>Leads: %{customdata[0]}<extra></extra>",
     ))
     fig_wd.update_layout(
         template=CHART_TEMPLATE,
@@ -257,7 +267,13 @@ else:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Outfit, sans-serif", color="#ffffff", size=13),
-        yaxis_title="Mediana de horas até 1º contato",
+        yaxis_title="Média de horas até 1º contato",
         xaxis=dict(categoryorder="array", categoryarray=WEEKDAYS_PT),
     )
     st.plotly_chart(fig_wd, use_container_width=True)
+    st.caption(
+        "Usando a **média** aqui, não a mediana — a mediana fica achatada perto de zero em "
+        "todos os dias (dominada por transições automáticas quase instantâneas) e escondia a "
+        "diferença real. A média revela o padrão: fim de semana tem cauda bem mais lenta "
+        "(passe o mouse pra ver mediana e nº de leads de cada dia)."
+    )

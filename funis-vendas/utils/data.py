@@ -357,7 +357,12 @@ def aging_em_aberto(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def time_to_contact_by_weekday(df: pd.DataFrame) -> pd.DataFrame:
-    """Mediana de horas até o 1º contato (Entrada→Tentando Contato), por dia da semana da Entrada."""
+    """
+    Tempo até o 1º contato (Entrada→Tentando Contato), por dia da semana da Entrada.
+    Traz média E mediana em horas: a mediana fica achatada perto de zero em todos os dias
+    (dominada por transições automáticas quase instantâneas), enquanto a média captura a
+    cauda mais lenta — é onde a diferença fim de semana vs. dia útil aparece de verdade.
+    """
     if df.empty:
         return pd.DataFrame()
 
@@ -376,9 +381,8 @@ def time_to_contact_by_weekday(df: pd.DataFrame) -> pd.DataFrame:
     )
     out = (
         primeiro_contato.groupby("dia_semana")["horas"]
-        .median()
+        .agg(leads="count", media_horas="mean", mediana_horas="median")
         .reindex(WEEKDAYS_PT)
         .reset_index()
-        .rename(columns={"horas": "mediana_horas"})
     )
     return out
