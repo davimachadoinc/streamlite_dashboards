@@ -25,11 +25,11 @@ st.session_state["_page_key"] = "colaboradores"
 
 from utils.style import inject_css
 from utils.data import (
-    PALETTE, COLAB_LABELS, COLAB_ORDER, COLAB_COLORS,
+    PALETTE, COLAB_LABELS, COLAB_ORDER, COLAB_COLORS, CATEG_COLORS,
     chart_layout, mes_fmt_ordered,
     last_val, prev_val, delta_str, no_data, fmt_brl,
     load_colaboradores_mensal, load_mrr_por_colaborador, load_custo_por_centro_custo,
-    load_custo_clt_por_categoria,
+    load_custo_por_categoria,
 )
 
 inject_css()
@@ -43,7 +43,7 @@ with st.spinner("Carregando dados de colaboradores..."):
     df_headcount    = load_colaboradores_mensal(n_meses=18)
     df_mrr_colab    = load_mrr_por_colaborador(n_meses=18)
     df_custo_cc     = load_custo_por_centro_custo()
-    df_custo_categ  = load_custo_clt_por_categoria()
+    df_custo_categ  = load_custo_por_categoria()
 
 if df_headcount.empty:
     no_data("Nenhum dado de colaboradores encontrado.")
@@ -183,31 +183,31 @@ else:
 st.divider()
 
 # ─────────────────────────────────────────────
-# SEÇÃO 4 — Composição do Custo CLT por Categoria (snapshot mês mais recente)
-# Só CLT/Estágio/Jovem Aprendiz — PJ (1 valor de NF) e Sócio (remuneração
-# declarada) não têm essa quebra na fonte.
+# SEÇÃO 4 — Composição do Custo por Categoria (snapshot mês mais recente)
+# CLT/Estágio/Jovem Aprendiz decompostos em Salário/Encargos/Benefícios/VT;
+# PJ e Sócio entram como categoria única cada (sem essa quebra na fonte).
 # ─────────────────────────────────────────────
-st.subheader("Composição do Custo CLT por Categoria")
-st.caption("Snapshot do mês mais recente de folha_colaborador · Só CLT/Estágio/Jovem Aprendiz (PJ e Sócio não têm essa quebra na fonte)")
+st.subheader("Composição do Custo por Categoria")
+st.caption("Snapshot do mês mais recente · CLT/Estágio/Jovem Aprendiz decompostos (folha_colaborador); PJ e Sócio como categoria única")
 
 if df_custo_categ.empty:
-    no_data("Nenhum dado de composição de custo CLT encontrado.")
+    no_data("Nenhum dado de composição de custo encontrado.")
 else:
-    categ_colors = [PALETTE[0], PALETTE[3], PALETTE[6], PALETTE[4]]
+    categ_colors = [CATEG_COLORS.get(c, PALETTE[3]) for c in df_custo_categ["categoria"]]
     fig = go.Figure()
     fig.add_bar(
         x=df_custo_categ["valor"],
         y=df_custo_categ["categoria"],
         orientation="h",
-        marker_color=categ_colors[: len(df_custo_categ)],
+        marker_color=categ_colors,
         text=[f"R$ {fmt_brl(v, 0)}" for v in df_custo_categ["valor"]],
         textposition="outside",
     )
-    fig = chart_layout(fig, height=max(280, 60 * len(df_custo_categ)))
+    fig = chart_layout(fig, height=max(280, 50 * len(df_custo_categ)))
     fig.update_layout(
         yaxis=dict(autorange="reversed", type="category", title=""),
         xaxis=dict(title="Custo (R$)", tickprefix="R$ ", type="linear"),
         margin=dict(l=4, r=60, t=32, b=8),
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("Encargos = FGTS + INSS Patronal estimado. Vale Transporte não entra no custo_empresa_estimado usado nas outras seções — por isso a soma aqui pode divergir ligeiramente do total da seção anterior.")
+    st.caption("Encargos = FGTS + INSS Patronal estimado. Vale Transporte não entra no custo_empresa_estimado do CLT usado na seção anterior — por isso a soma aqui pode divergir ligeiramente do total de Custo por Centro de Custo.")

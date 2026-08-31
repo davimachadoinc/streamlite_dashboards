@@ -1781,26 +1781,54 @@ def load_custo_por_centro_custo() -> pd.DataFrame:
     return _bq_query(query, "bigquery_bi")
 
 
-@st.cache_data(ttl=72000)
-def load_custo_clt_por_categoria() -> pd.DataFrame:
-    """
-    Composição do custo CLT por categoria de despesa — snapshot do mês mais
-    recente de folha_colaborador. Só cobre CLT/Estágio/Jovem Aprendiz (quem
-    está na folha) — PJ e Sócio não têm essa quebra na fonte (PJ é 1 valor de
-    NF só; Sócio usa remuneracao_fixa/variavel, sem decomposição). Exclui a
-    linha de Sócio que eventualmente aparece em folha_colaborador (pró-labore
-    parcial, ver load_custo_por_centro_custo) pra não misturar categorias.
+CATEG_COLORS = {
+    "Salário":                         "#6eda2c",
+    "Encargos (INSS + FGTS Patronal)": "#57d124",
+    "Benefícios":                      "#8ae650",
+    "Vale Transporte":                 "#3ba811",
+    "PJ":                              "#ffffff",
+    "Sócio":                           "#a0a0a0",
+}
 
-    Categorias batem quase exatamente com custo_empresa_estimado (validado
-    ao vivo em 2026-08-31: diferença = exatamente o total de Vale Transporte,
-    que não entra em custo_empresa_estimado na fonte):
+
+@st.cache_data(ttl=72000)
+def load_custo_por_categoria() -> pd.DataFrame:
+    """
+    Composição do custo total por categoria — snapshot do mês mais recente.
+    CLT/Estágio/Jovem Aprendiz (folha_colaborador) decompostos em Salário,
+    Encargos, Benefícios e Vale Transporte (campos já pré-agregados na
+    fonte). PJ e Sócio entram como categoria única cada — não têm essa
+    decomposição na fonte (PJ é 1 valor de NF só; Sócio usa
+    remuneracao_fixa/variavel de cadastro_colaborador). Exclui a linha de
+    Sócio que eventualmente aparece em folha_colaborador (pró-labore
+    parcial, ver load_custo_por_centro_custo) pra não contar 2x.
+
+    As 4 categorias de CLT batem quase exatamente com custo_empresa_estimado
+    (validado ao vivo em 2026-08-31: diferença = exatamente o total de Vale
+    Transporte, que não entra em custo_empresa_estimado na fonte):
       Salário            = salario_bruto
       Encargos            = valor_fgts + inss_patronal_estimado
       Benefícios          = beneficios_empresa
       Vale Transporte     = vale_transporte
     """
     query = """
-    WITH folha_mes AS (
+    WITH cc_ativo AS (
+      SELECT * EXCEPT(rn) FROM (
+        SELECT
+          cc.contrato,
+          REGEXP_REPLACE(cc.cpf_cnpj, r'[^0-9]', '') AS doc_norm,
+          cc.remuneracao_fixa,
+          cc.remuneracao_variavel,
+          ROW_NUMBER() OVER (
+            PARTITION BY REGEXP_REPLACE(cc.cpf_cnpj, r'[^0-9]', '')
+            ORDER BY cc.data_entrada DESC
+          ) AS rn
+        FROM `business-intelligence-467516.dp_inchurch.cadastro_colaborador` cc
+        WHERE cc.situacao = 'ATIVO' AND cc.cpf_cnpj IS NOT NULL
+      )
+      WHERE rn = 1
+    ),
+    folha_mes AS (
       SELECT *
       FROM `business-intelligence-467516.dp_inchurch.folha_colaborador`
       WHERE competencia = (
@@ -1808,12 +1836,38 @@ def load_custo_clt_por_categoria() -> pd.DataFrame:
       )
     ),
     folha_clt AS (
+      -- INNER JOIN (não LEFT) — mesma regra da Seção "Custo por Centro de
+      -- Custo": só conta CLT com cadastro ATIVO. Sem isso, a linha parcial
+      -- de Sócio que às vezes aparece em folha_colaborador (ex: Sydney, cujo
+      -- cpf na folha não bate com cpf_cnpj do cadastro) não é excluída pelo
+      -- filtro de Sócio e conta 2x (uma vez aqui fatiada, outra em
+      -- socio_custo) — confirmado ao vivo em 2026-08-31.
       SELECT f.*
       FROM folha_mes f
-      LEFT JOIN `business-intelligence-467516.dp_inchurch.cadastro_colaborador` cc
-        ON REGEXP_REPLACE(cc.cpf_cnpj, r'[^0-9]', '') = REGEXP_REPLACE(f.cpf, r'[^0-9]', '')
-       AND cc.situacao = 'ATIVO'
-      WHERE cc.contrato IS NULL OR cc.contrato != 'Sócio'
+      INNER JOIN cc_ativo cc ON cc.doc_norm = REGEXP_REPLACE(f.cpf, r'[^0-9]', '')
+      WHERE cc.contrato != 'Sócio'
+    ),
+    pj_ultimo_mes AS (
+      -- INNER JOIN com cc_ativo (não LEFT) — mesma regra da Seção "Custo por
+      -- Centro de Custo": só conta PJ com cadastro ATIVO em
+      -- cadastro_colaborador. Pagamentos pra CNPJ sem cadastro (fornecedor/
+      -- agência classificado em pj_pagamentos por engano, ou cadastro
+      -- faltando) ficam de fora, senão o total de PJ diverge do resto da
+      -- página. Confirmado ao vivo em 2026-08-31: 2 CNPJ pagos (R$61.558,40)
+      -- não existem em cadastro_colaborador; 1 PJ inativo desde 28/02/2026
+      -- recebeu R$8.000 no mês mais recente — investigar na Plataforma DP.
+      SELECT p.valor
+      FROM `business-intelligence-467516.dp_inchurch.pj_pagamentos` p
+      INNER JOIN cc_ativo cc ON cc.doc_norm = REGEXP_REPLACE(p.cnpj, r'[^0-9]', '')
+      WHERE p.competencia = (
+        SELECT MAX(competencia) FROM `business-intelligence-467516.dp_inchurch.pj_pagamentos`
+      )
+        AND cc.contrato != 'Sócio'
+    ),
+    socio_custo AS (
+      SELECT (COALESCE(remuneracao_fixa, 0) + COALESCE(remuneracao_variavel, 0)) AS valor
+      FROM cc_ativo
+      WHERE contrato = 'Sócio'
     )
     SELECT categoria, SUM(valor) AS valor
     FROM (
@@ -1824,6 +1878,10 @@ def load_custo_clt_por_categoria() -> pd.DataFrame:
       SELECT 'Benefícios', COALESCE(beneficios_empresa,0) FROM folha_clt
       UNION ALL
       SELECT 'Vale Transporte', COALESCE(vale_transporte,0) FROM folha_clt
+      UNION ALL
+      SELECT 'PJ', valor FROM pj_ultimo_mes
+      UNION ALL
+      SELECT 'Sócio', valor FROM socio_custo
     )
     GROUP BY 1
     ORDER BY 2 DESC
