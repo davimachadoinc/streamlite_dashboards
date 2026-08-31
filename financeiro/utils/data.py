@@ -120,6 +120,82 @@ _PLAN_CASE = """
     END
 """
 
+# ─────────────────────────────────────────────
+# BRANCH 3 — cliente desativado SEM NENHUMA linha em vw-splgc-tabela_mrr_validos
+# (nem com dt_fim_mens IS NULL) cuja ÚNICA liquidação paga > 0 não é mensalidade
+# (Setup/Adesão/etc). Valor vem de `vw-splgc-tabela_mrr_e_descricao` (view sobre a
+# tabela NÃO filtrada `splgc-tabela_mrr` que já traz st_descricao_prd real — inclui
+# MRR nunca liquidado). Sem isso o cliente some do churn inteiro — bug descoberto
+# ago/2026 (caso ADEPI, 102 clientes afetados). Ver churn-desativacoes.md no vault
+# Obsidian para o diagnóstico completo e a regra de negócio.
+# ─────────────────────────────────────────────
+_EXCL_LIQUIDACAO_NAO_MENSALIDADE = """
+    (   liq.comp_st_descricao_prd LIKE '%Setup%'
+     OR liq.comp_st_descricao_prd LIKE '%[PRO-RATA]%'
+     OR liq.comp_st_descricao_prd LIKE '%Desconto%'
+     OR liq.comp_st_descricao_prd LIKE '%Abono%'
+     OR liq.comp_st_descricao_prd LIKE '%Intermedia%'
+     OR liq.comp_st_descricao_prd LIKE 'Especialista%'
+     OR liq.comp_st_descricao_prd LIKE 'Acordo%'
+     OR liq.comp_st_descricao_prd LIKE 'Reajuste%'
+     OR liq.comp_st_descricao_prd LIKE '%Multa%'
+     OR liq.comp_st_descricao_prd LIKE '%Ades%'
+     OR liq.comp_st_descricao_prd LIKE '%Juros%'
+     OR liq.comp_st_descricao_prd LIKE '%Taxa banc%'
+     OR liq.comp_st_descricao_prd LIKE 'PLANO MENSAL'
+    )
+"""
+
+_BRANCH3_LIQUIDACAO_UNICA = """
+      UNION ALL
+      -- Clientes desativados SEM NENHUMA linha em vw-splgc-tabela_mrr_validos cuja
+      -- UNICA liquidacao paga > 0 nao e mensalidade (Setup/Adesao) -- valor vem de
+      -- vw-splgc-tabela_mrr_e_descricao (nao filtrada). Ver churn-desativacoes.md
+      -- (vault, ago/2026).
+      SELECT
+        mrr.st_sincro_sac,
+        mrr.st_descricao_prd,
+        CAST(c.dt_desativacao_sac AS DATE)                    AS dt_fim,
+        DATE_TRUNC(CAST(c.dt_desativacao_sac AS DATE), MONTH) AS mes,
+        mrr.valor_total
+      FROM `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+      INNER JOIN (
+        SELECT
+          st_sincro_sac, st_descricao_prd, valor_total,
+          COALESCE(CAST(dt_fim_mens AS DATE), DATE '9999-12-31') AS fim_efetivo,
+          MAX(COALESCE(CAST(dt_fim_mens AS DATE), DATE '9999-12-31'))
+            OVER (PARTITION BY st_sincro_sac) AS max_fim
+        FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_e_descricao`
+        WHERE valor_total > 0
+          AND st_descricao_prd NOT LIKE '%Setup%'
+          AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+          AND st_descricao_prd NOT LIKE '%Desconto%'
+          AND st_descricao_prd NOT LIKE '%Abono%'
+          AND st_descricao_prd NOT LIKE '%Intermedia%'
+          AND st_descricao_prd NOT LIKE 'Especialista%'
+          AND st_descricao_prd NOT LIKE 'Acordo%'
+          AND st_descricao_prd NOT LIKE 'Reajuste%'
+      ) mrr
+        ON mrr.st_sincro_sac = c.st_sincro_sac AND mrr.fim_efetivo = mrr.max_fim
+      WHERE c.dt_desativacao_sac IS NOT NULL
+        AND CAST(c.dt_desativacao_sac AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL {janela_meses} MONTH)
+        AND CAST(c.dt_desativacao_sac AS DATE) <= LAST_DAY(CURRENT_DATE())
+        AND NOT EXISTS (
+          SELECT 1 FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` v
+          WHERE v.st_sincro_sac = c.st_sincro_sac
+        )
+        AND (
+          SELECT COUNT(*) FROM `business-intelligence-467516.Splgc.splgc-cobrancas_liquidacao-all` liq
+          WHERE liq.st_sincro_sac = c.st_sincro_sac AND liq.comp_valor > 0
+        ) = 1
+        AND EXISTS (
+          SELECT 1 FROM `business-intelligence-467516.Splgc.splgc-cobrancas_liquidacao-all` liq
+          WHERE liq.st_sincro_sac = c.st_sincro_sac AND liq.comp_valor > 0
+            AND {excl_liquidacao}
+        )
+        {filtro_extra}
+"""
+
 
 # ─────────────────────────────────────────────
 # LAYOUT PADRÃO DE GRÁFICOS
@@ -274,7 +350,7 @@ def _bq_query(query: str, project_key: str = "bigquery_tech") -> pd.DataFrame:
 # ── PÁGINA 1: COBRANÇA / MÓDULOS ─────────────
 # ─────────────────────────────────────────────
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_contratos_mensais() -> pd.DataFrame:
     """
     Clientes únicos com boleto emitido por mês + totais de receita.
@@ -313,7 +389,7 @@ def load_contratos_mensais() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_modulos_mensais() -> pd.DataFrame:
     """
     Clientes únicos com cobrança emitida por módulo por mês.
@@ -351,7 +427,7 @@ def load_modulos_mensais() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_receita_modulos_mensais() -> pd.DataFrame:
     """
     Receita por módulo por mês usando comp_valor diretamente na tabela de cobranças.
@@ -390,7 +466,7 @@ def load_receita_modulos_mensais() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_receita_liquidada_diaria(n_meses: int = 4) -> pd.DataFrame:
     """
     Receita liquidada por dia (dt_liquidacao_recb), últimos n_meses (mês atual incluso).
@@ -433,7 +509,7 @@ def load_receita_liquidada_diaria(n_meses: int = 4) -> pd.DataFrame:
 # ── PÁGINA 2: TRANSAÇÕES ─────────────────────
 # ─────────────────────────────────────────────
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=72000)
 def load_sara_ids() -> tuple:
     """Retorna tuple de tertiarygroup_ids de toda a denominação Sara Nossa Terra."""
     query = """
@@ -452,7 +528,7 @@ def load_sara_ids() -> tuple:
     return tuple(sorted(df["tertiarygroup_id"].astype(int).tolist()))
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_transactions_por_metodo(exclude_ids: tuple = (), only_ids: tuple = ()) -> pd.DataFrame:
     """
     Soma de value por método de pagamento, canal, tipo (doacao/outros) e mês (últimos 15 meses).
@@ -499,7 +575,7 @@ def load_transactions_por_metodo(exclude_ids: tuple = (), only_ids: tuple = ()) 
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_take_rate_snapshot_v2(exclude_ids: tuple = (), only_ids: tuple = ()) -> dict:
     """
     Snapshot do take rate do mês corrente.
@@ -563,7 +639,7 @@ def load_take_rate_snapshot_v2(exclude_ids: tuple = (), only_ids: tuple = ()) ->
     }
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_take_rate_historico_v2(exclude_ids: tuple = (), only_ids: tuple = ()) -> pd.DataFrame:
     """
     Take rate histórico mensal.
@@ -637,7 +713,7 @@ def load_take_rate_historico_v2(exclude_ids: tuple = (), only_ids: tuple = ()) -
     return df[["mes", "dia_max", "receita_intermediacao", "tpv", "take_rate_pct"]].sort_values("mes")
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_intermediacao_mensal() -> pd.DataFrame:
     """
     Receita de Intermediação de Negócios (comp_st_conta_cont = '1.2.4') por mês.
@@ -663,7 +739,7 @@ def load_intermediacao_mensal() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_transactions_clientes_por_mes(exclude_ids: tuple = (), only_ids: tuple = ()) -> pd.DataFrame:
     """
     Uma linha por (mes, channel, tipo, tertiarygroup_id) único — sem pré-agregar clientes.
@@ -710,7 +786,7 @@ def load_transactions_clientes_por_mes(exclude_ids: tuple = (), only_ids: tuple 
 # ── PÁGINA 3: DESATIVAÇÕES ───────────────────
 # ─────────────────────────────────────────────
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_desativacoes_mensais() -> pd.DataFrame:
     """
     MRR perdido e clientes desativados por módulo por mês (últimos 15 meses).
@@ -780,6 +856,7 @@ def load_desativacoes_mensais() -> pd.DataFrame:
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
       ) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=15, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="")}
     ),
     renovacoes AS (
       -- (cliente, família de produto) com dt_fim no último dia do mês
@@ -827,7 +904,7 @@ def load_desativacoes_mensais() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_desativacoes_total_parcial() -> pd.DataFrame:
     """
     Desativações por mês classificadas em Total (cliente sem nenhum produto de
@@ -885,6 +962,7 @@ def load_desativacoes_total_parcial() -> pd.DataFrame:
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
       ) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=15, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="AND " + _EXCL_NAO_MENSALIDADE.format(col="mrr.st_descricao_prd"))}
     ),
     renovacoes AS (
       SELECT DISTINCT
@@ -934,7 +1012,7 @@ def load_desativacoes_total_parcial() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_receita_planos_mensais() -> pd.DataFrame:
     """
     Receita emitida e liquidada por PLANO BASE por mês (últimos 15 meses).
@@ -1003,7 +1081,7 @@ def load_receita_planos_mensais() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_desativacoes_por_plano() -> pd.DataFrame:
     """
     Desativações de PLANO BASE por mês (exclui módulos).
@@ -1062,6 +1140,7 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
       ) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=15, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="AND " + _EXCL_MODULOS.format(col="mrr.st_descricao_prd") + " AND " + _EXCL_NAO_MENSALIDADE.format(col="mrr.st_descricao_prd"))}
     ),
     renovacoes AS (
       -- Restrição de cardinalidade 1:1 evita casar em massa clientes com vários
@@ -1099,7 +1178,7 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_desativacoes_detalhado() -> pd.DataFrame:
     """
     Desativações no nível de cliente — mês, módulo, plano, nome e MRR perdido.
@@ -1157,6 +1236,7 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
       ) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=15, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="AND " + _EXCL_NAO_MENSALIDADE.format(col="mrr.st_descricao_prd"))}
     ),
     renovacoes AS (
       -- Restrição de cardinalidade 1:1 evita casar em massa clientes com vários
@@ -1208,7 +1288,7 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
 # ── PÁGINA 4: INADIMPLÊNCIA ───────────────────
 # ─────────────────────────────────────────────
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_grupos() -> list[str]:
     """Retorna grupos disponíveis em splgc-grupo (ex: Ana, Priscila)."""
     query = """
@@ -1221,7 +1301,7 @@ def load_grupos() -> list[str]:
     return sorted(df["grupo"].tolist()) if not df.empty else []
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_inadimplencia_serie(grupo: str | None = None) -> pd.DataFrame:
     """
     Série histórica de inadimplência — snapshot por dia útil (últimos 6 meses).
@@ -1323,7 +1403,7 @@ def load_inadimplencia_serie(grupo: str | None = None) -> pd.DataFrame:
     return result
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_inadimplencia_por_plano(grupo: str | None = None) -> pd.DataFrame:
     """
     Inadimplência 30d atual agregada por plano base.
@@ -1363,7 +1443,7 @@ def load_inadimplencia_por_plano(grupo: str | None = None) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_inadimplencia_por_frequencia() -> pd.DataFrame:
     """
     Distribuição de clientes inadimplentes (30d) por quantidade de boletos em aberto.
@@ -1411,7 +1491,7 @@ def load_inadimplencia_por_frequencia() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_inadimplencia_top_clientes(dias: int = 30, grupo: str | None = None) -> pd.DataFrame:
     """
     Top 30 clientes com maior valor em aberto na janela rolante de N dias.
@@ -1466,7 +1546,7 @@ def load_inadimplencia_top_clientes(dias: int = 30, grupo: str | None = None) ->
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_base_ativa_por_plano() -> pd.DataFrame:
     """
     Clientes ativos por PLANO BASE no início de cada mês (últimos 15 meses).
@@ -1499,3 +1579,184 @@ def load_base_ativa_por_plano() -> pd.DataFrame:
         df["mes"]   = pd.to_datetime(df["mes"])
         df["plano"] = df["plano"].str.lower()
     return df
+
+
+# ─────────────────────────────────────────────
+# ── PÁGINA 5: COLABORADORES ──────────────────
+# Fonte: dp_inchurch (BQ_BI, mesmo projeto de Splgc — join direto em SQL,
+# sem pandas). Ver dp-inchurch-dicionario-dados.md no vault Obsidian.
+# ─────────────────────────────────────────────
+
+COLAB_LABELS = {"clt": "CLT", "pj": "PJ", "outros": "Outros"}
+COLAB_ORDER  = ["clt", "pj", "outros"]
+COLAB_COLORS = {"clt": "#6eda2c", "pj": "#ffffff", "outros": "#a0a0a0"}
+
+# Valores reais de cadastro_colaborador.contrato (checado ao vivo em 2026-08-31):
+# 'CLT', 'PJ', 'ESTÁGIO', 'JOVEM APRENDIZ', 'Sócio' (case mistura, cuidado ao
+# alterar). 'Sócio' e contrato vazio (NULL) ficam fora do headcount — não são
+# força de trabalho operacional / erro de cadastro.
+_COLAB_BUCKET = """
+    CASE
+      WHEN cc.contrato = 'CLT' THEN 'clt'
+      WHEN cc.contrato = 'PJ' THEN 'pj'
+      WHEN cc.contrato IN ('ESTÁGIO', 'JOVEM APRENDIZ') THEN 'outros'
+    END
+"""
+
+# Chave de dedup por pessoa: cpf_cnpj normalizado, com fallback pra
+# empresa+codigo quando cpf_cnpj é NULL (2 casos). Necessário porque pessoas
+# migradas entre empresas (Atos6/Justus -> Inradar App) ganham codigo novo e
+# viram uma 2ª/3ª linha na tabela — contar por linha infla o headcount.
+# Ver "achado central" em dp-inchurch-dicionario-dados.md.
+_COLAB_DOC_KEY = (
+    "COALESCE(NULLIF(REGEXP_REPLACE(cc.cpf_cnpj, r'[^0-9]', ''), ''), "
+    "CONCAT(cc.empresa, '|', cc.codigo))"
+)
+
+
+@st.cache_data(ttl=72000)
+def load_colaboradores_mensal(n_meses: int = 18) -> pd.DataFrame:
+    """
+    Contagem de colaboradores por mês (CLT/PJ/Outros), últimos n_meses.
+    Snapshot no início de cada mês: data_entrada <= mês E (data_saida IS NULL
+    OU data_saida > mês) — mesmo padrão de load_base_ativa_por_plano.
+    """
+    query = f"""
+    SELECT
+      cal.mes,
+      {_COLAB_BUCKET} AS bucket,
+      COUNT(DISTINCT {_COLAB_DOC_KEY}) AS colaboradores
+    FROM (
+      SELECT mes
+      FROM UNNEST(GENERATE_DATE_ARRAY(
+        DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL {n_meses} MONTH),
+        DATE_TRUNC(CURRENT_DATE(), MONTH),
+        INTERVAL 1 MONTH
+      )) AS mes
+    ) cal
+    CROSS JOIN `business-intelligence-467516.dp_inchurch.cadastro_colaborador` cc
+    WHERE cc.contrato IN ('CLT', 'PJ', 'ESTÁGIO', 'JOVEM APRENDIZ')
+      AND cc.data_entrada IS NOT NULL
+      AND cc.data_entrada <= cal.mes
+      AND (cc.data_saida IS NULL OR cc.data_saida > cal.mes)
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+    return df
+
+
+@st.cache_data(ttl=72000)
+def load_mrr_por_colaborador(n_meses: int = 18) -> pd.DataFrame:
+    """
+    MRR total da empresa / headcount total (CLT+PJ+Outros) por mês.
+    Splgc.vw-splgc-tabela_mrr_validos e dp_inchurch.cadastro_colaborador estão
+    no mesmo projeto BQ_BI (business-intelligence-467516) -> join direto em
+    SQL puro, sem precisar de merge em pandas.
+    """
+    query = f"""
+    WITH cal AS (
+      SELECT mes
+      FROM UNNEST(GENERATE_DATE_ARRAY(
+        DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL {n_meses} MONTH),
+        DATE_TRUNC(CURRENT_DATE(), MONTH),
+        INTERVAL 1 MONTH
+      )) AS mes
+    ),
+    mrr AS (
+      SELECT cal.mes, SUM(mrr.valor_total) AS mrr_total
+      FROM cal
+      CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
+      WHERE CAST(mrr.dt_inicio_mens AS DATE) <= cal.mes
+        AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) > cal.mes)
+      GROUP BY 1
+    ),
+    headcount AS (
+      SELECT cal.mes, COUNT(DISTINCT {_COLAB_DOC_KEY}) AS colaboradores
+      FROM cal
+      CROSS JOIN `business-intelligence-467516.dp_inchurch.cadastro_colaborador` cc
+      WHERE cc.contrato IN ('CLT', 'PJ', 'ESTÁGIO', 'JOVEM APRENDIZ')
+        AND cc.data_entrada IS NOT NULL
+        AND cc.data_entrada <= cal.mes
+        AND (cc.data_saida IS NULL OR cc.data_saida > cal.mes)
+      GROUP BY 1
+    )
+    SELECT
+      mrr.mes,
+      mrr.mrr_total,
+      headcount.colaboradores,
+      SAFE_DIVIDE(mrr.mrr_total, headcount.colaboradores) AS mrr_por_colaborador
+    FROM mrr
+    JOIN headcount USING (mes)
+    ORDER BY 1
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+    return df
+
+
+@st.cache_data(ttl=72000)
+def load_custo_por_centro_custo() -> pd.DataFrame:
+    """
+    Distribuição de custo por centro de custo — snapshot do mês mais recente
+    disponível em cada fonte (folha_colaborador pra CLT/Estágio/Jovem
+    Aprendiz, pj_pagamentos pra PJ). Cada fonte usa seu próprio mês mais
+    recente (podem divergir por até ~1 mês entre pipelines).
+    CLT: custo_empresa_estimado (já inclui encargos/INSS patronal).
+    PJ: valor da NF paga.
+    Join com cadastro_colaborador por CPF/CNPJ normalizado, restrito a
+    situacao='ATIVO' e dedupado por pessoa (ROW_NUMBER, fica com a linha de
+    data_entrada mais recente) — sem isso, pessoa migrada de empresa
+    (Atos6/Justus -> Inradar App, 2-3 linhas por CPF) casa 2x no join e infla
+    o custo do centro de custo dela.
+    """
+    query = """
+    WITH cc_ativo AS (
+      SELECT * EXCEPT(rn) FROM (
+        SELECT
+          cc.centro_custo,
+          REGEXP_REPLACE(cc.cpf_cnpj, r'[^0-9]', '') AS doc_norm,
+          ROW_NUMBER() OVER (
+            PARTITION BY REGEXP_REPLACE(cc.cpf_cnpj, r'[^0-9]', '')
+            ORDER BY cc.data_entrada DESC
+          ) AS rn
+        FROM `business-intelligence-467516.dp_inchurch.cadastro_colaborador` cc
+        WHERE cc.situacao = 'ATIVO' AND cc.cpf_cnpj IS NOT NULL
+      )
+      WHERE rn = 1
+    ),
+    folha_ultimo_mes AS (
+      SELECT
+        REGEXP_REPLACE(f.cpf, r'[^0-9]', '') AS doc_norm,
+        f.custo_empresa_estimado AS custo
+      FROM `business-intelligence-467516.dp_inchurch.folha_colaborador` f
+      WHERE f.competencia = (
+        SELECT MAX(competencia) FROM `business-intelligence-467516.dp_inchurch.folha_colaborador`
+      )
+    ),
+    pj_ultimo_mes AS (
+      SELECT
+        REGEXP_REPLACE(p.cnpj, r'[^0-9]', '') AS doc_norm,
+        p.valor AS custo
+      FROM `business-intelligence-467516.dp_inchurch.pj_pagamentos` p
+      WHERE p.competencia = (
+        SELECT MAX(competencia) FROM `business-intelligence-467516.dp_inchurch.pj_pagamentos`
+      )
+    ),
+    custos AS (
+      SELECT doc_norm, custo FROM folha_ultimo_mes
+      UNION ALL
+      SELECT doc_norm, custo FROM pj_ultimo_mes
+    )
+    SELECT
+      COALESCE(cc_ativo.centro_custo, 'Sem Centro de Custo') AS centro_custo,
+      SUM(custos.custo) AS custo_total
+    FROM custos
+    JOIN cc_ativo USING (doc_norm)
+    GROUP BY 1
+    ORDER BY 2 DESC
+    """
+    return _bq_query(query, "bigquery_bi")

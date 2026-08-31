@@ -42,7 +42,7 @@ C:\Claude_Files\
 
 ### Cache
 - `@st.cache_resource` — clientes BigQuery (uma instância por project_key, sem TTL).
-- `@st.cache_data(ttl=3600)` — resultados de queries (1 hora).
+- `@st.cache_data(ttl=72000)` — resultados de queries (20 horas), pois todas consultam tabelas Splgc (BQ_BI) ou backend_bi (BQ_TECH).
 
 ### BigQuery — duas conexões separadas
 | Alias | Projeto GCP | Secret key |
@@ -144,7 +144,7 @@ Converter: `CAST(tertiarygroup_id AS STRING)` ou `str()` no pandas.
 
 ## Convenções de código
 
-- Queries SQL ficam em `utils/data.py` como funções com `@st.cache_data(ttl=3600)`.
+- Queries SQL ficam em `utils/data.py` como funções com `@st.cache_data(ttl=72000)`.
 - Toda função de query usa `_bq_query(query, project_key)` internamente.
 - Gráficos são montados nas páginas com `go.Figure()` + `chart_layout(fig)`.
 - Sempre passar `categoryorder="array", categoryarray=x_order` ao Plotly para garantir ordem cronológica no eixo X.
