@@ -21,6 +21,16 @@ if not st.user.is_logged_in:
     st.error("⛔ Acesso não autorizado. Faça login na página inicial.")
     st.stop()
 
+# Restrição extra: dado sensível de remuneração/custo por pessoa — só um
+# subconjunto dos e-mails já autorizados no app inteiro pode ver esta página.
+_colab_allowed = st.secrets.get("app_config", {}).get("colaboradores_allowed_emails", [])
+if st.user.email not in _colab_allowed:
+    st.error(
+        "⛔ Você não tem permissão para acessar a página Colaboradores.\n\n"
+        "Fale com o administrador se precisar de acesso."
+    )
+    st.stop()
+
 st.session_state["_page_key"] = "colaboradores"
 
 from utils.style import inject_css
