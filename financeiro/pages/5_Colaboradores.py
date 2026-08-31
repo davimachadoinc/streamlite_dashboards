@@ -35,13 +35,21 @@ from utils.data import (
 inject_css()
 
 # ── Header ────────────────────────────────────
-st.markdown("<h1>Colaboradores <span>& Custo</span></h1>", unsafe_allow_html=True)
-st.caption("Últimos 18 meses · Fonte: Plataforma DP InChurch (dp_inchurch)")
+col_title, col_squad = st.columns([8, 3], vertical_alignment="bottom")
+with col_title:
+    st.markdown("<h1>Colaboradores <span>& Custo</span></h1>", unsafe_allow_html=True)
+    st.caption("Últimos 18 meses · Fonte: Plataforma DP InChurch (dp_inchurch)")
+with col_squad:
+    incluir_squad = st.checkbox(
+        "Incluir Squad as a Service no MRR",
+        value=True,
+        help="Só 3 contratos ativos hoje, mas ~10% do MRR total (ticket médio ~R$36k/contrato). Afeta o KPI e o gráfico de MRR/Colaborador.",
+    )
 
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando dados de colaboradores..."):
     df_headcount    = load_colaboradores_mensal(n_meses=18)
-    df_mrr_colab    = load_mrr_por_colaborador(n_meses=18)
+    df_mrr_colab    = load_mrr_por_colaborador(n_meses=18, incluir_squad=incluir_squad)
     df_custo_cc     = load_custo_por_centro_custo()
     df_custo_categ  = load_custo_por_categoria()
 
@@ -147,7 +155,8 @@ else:
         yaxis=dict(title="R$ / colaborador", tickprefix="R$ "),
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("MRR total ativo (vw-splgc-tabela_mrr_validos) ÷ headcount total (CLT + PJ + Outros) no início de cada mês.")
+    squad_nota = "incluindo" if incluir_squad else "excluindo"
+    st.caption(f"MRR total ativo (vw-splgc-tabela_mrr_validos, {squad_nota} Squad as a Service) ÷ headcount total (CLT + PJ + Outros) no início de cada mês.")
 
 st.divider()
 

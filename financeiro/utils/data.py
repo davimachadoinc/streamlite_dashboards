@@ -1649,13 +1649,18 @@ def load_colaboradores_mensal(n_meses: int = 18) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=72000)
-def load_mrr_por_colaborador(n_meses: int = 18) -> pd.DataFrame:
+def load_mrr_por_colaborador(n_meses: int = 18, incluir_squad: bool = True) -> pd.DataFrame:
     """
     MRR total da empresa / headcount total (CLT+PJ+Outros) por mês.
     Splgc.vw-splgc-tabela_mrr_validos e dp_inchurch.cadastro_colaborador estão
     no mesmo projeto BQ_BI (business-intelligence-467516) -> join direto em
     SQL puro, sem precisar de merge em pandas.
+
+    incluir_squad=False exclui os contratos Squad as a Service do MRR — só 3
+    contratos ativos hoje, mas ticket alto (~R$36k/contrato, ~10% do MRR
+    total), então vale a opção de ver o MRR/Colaborador com e sem eles.
     """
+    squad_filter = "" if incluir_squad else "AND mrr.st_descricao_prd NOT LIKE '%Squad as a Service%'"
     query = f"""
     WITH cal AS (
       SELECT mes
@@ -1671,6 +1676,7 @@ def load_mrr_por_colaborador(n_meses: int = 18) -> pd.DataFrame:
       CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
       WHERE CAST(mrr.dt_inicio_mens AS DATE) <= cal.mes
         AND (mrr.dt_fim_mens IS NULL OR CAST(mrr.dt_fim_mens AS DATE) > cal.mes)
+        {squad_filter}
       GROUP BY 1
     ),
     headcount AS (
