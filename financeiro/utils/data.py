@@ -1707,6 +1707,13 @@ def load_custo_por_centro_custo() -> pd.DataFrame:
     recente (podem divergir por até ~1 mês entre pipelines).
     CLT: custo_empresa_estimado (já inclui encargos/INSS patronal).
     PJ: valor da NF paga.
+    Sócio: NÃO aparece (ou aparece só parcialmente) em folha_colaborador nem
+    pj_pagamentos — confirmado ao vivo em 2026-08-31 (1 dos 2 sócios ativos
+    tem 0 linhas nas duas tabelas; o outro tem uma linha de folha de
+    R$3.486, uma fração do pró-labore real dele). Usa
+    remuneracao_fixa + remuneracao_variavel de cadastro_colaborador em vez
+    disso — exclui o sócio das fontes de folha/pj pra não contar 2x a
+    fração que porventura exista lá.
     Join com cadastro_colaborador por CPF/CNPJ normalizado, restrito a
     situacao='ATIVO' e dedupado por pessoa (ROW_NUMBER, fica com a linha de
     data_entrada mais recente) — sem isso, pessoa migrada de empresa
@@ -1718,7 +1725,10 @@ def load_custo_por_centro_custo() -> pd.DataFrame:
       SELECT * EXCEPT(rn) FROM (
         SELECT
           cc.centro_custo,
+          cc.contrato,
           REGEXP_REPLACE(cc.cpf_cnpj, r'[^0-9]', '') AS doc_norm,
+          cc.remuneracao_fixa,
+          cc.remuneracao_variavel,
           ROW_NUMBER() OVER (
             PARTITION BY REGEXP_REPLACE(cc.cpf_cnpj, r'[^0-9]', '')
             ORDER BY cc.data_entrada DESC
@@ -1728,6 +1738,11 @@ def load_custo_por_centro_custo() -> pd.DataFrame:
       )
       WHERE rn = 1
     ),
+    socio_custo AS (
+      SELECT doc_norm, (COALESCE(remuneracao_fixa, 0) + COALESCE(remuneracao_variavel, 0)) AS custo
+      FROM cc_ativo
+      WHERE contrato = 'Sócio'
+    ),
     folha_ultimo_mes AS (
       SELECT
         REGEXP_REPLACE(f.cpf, r'[^0-9]', '') AS doc_norm,
@@ -1736,6 +1751,7 @@ def load_custo_por_centro_custo() -> pd.DataFrame:
       WHERE f.competencia = (
         SELECT MAX(competencia) FROM `business-intelligence-467516.dp_inchurch.folha_colaborador`
       )
+        AND REGEXP_REPLACE(f.cpf, r'[^0-9]', '') NOT IN (SELECT doc_norm FROM socio_custo)
     ),
     pj_ultimo_mes AS (
       SELECT
@@ -1745,17 +1761,70 @@ def load_custo_por_centro_custo() -> pd.DataFrame:
       WHERE p.competencia = (
         SELECT MAX(competencia) FROM `business-intelligence-467516.dp_inchurch.pj_pagamentos`
       )
+        AND REGEXP_REPLACE(p.cnpj, r'[^0-9]', '') NOT IN (SELECT doc_norm FROM socio_custo)
     ),
     custos AS (
       SELECT doc_norm, custo FROM folha_ultimo_mes
       UNION ALL
       SELECT doc_norm, custo FROM pj_ultimo_mes
+      UNION ALL
+      SELECT doc_norm, custo FROM socio_custo
     )
     SELECT
       COALESCE(cc_ativo.centro_custo, 'Sem Centro de Custo') AS centro_custo,
       SUM(custos.custo) AS custo_total
     FROM custos
     JOIN cc_ativo USING (doc_norm)
+    GROUP BY 1
+    ORDER BY 2 DESC
+    """
+    return _bq_query(query, "bigquery_bi")
+
+
+@st.cache_data(ttl=72000)
+def load_custo_clt_por_categoria() -> pd.DataFrame:
+    """
+    Composição do custo CLT por categoria de despesa — snapshot do mês mais
+    recente de folha_colaborador. Só cobre CLT/Estágio/Jovem Aprendiz (quem
+    está na folha) — PJ e Sócio não têm essa quebra na fonte (PJ é 1 valor de
+    NF só; Sócio usa remuneracao_fixa/variavel, sem decomposição). Exclui a
+    linha de Sócio que eventualmente aparece em folha_colaborador (pró-labore
+    parcial, ver load_custo_por_centro_custo) pra não misturar categorias.
+
+    Categorias batem quase exatamente com custo_empresa_estimado (validado
+    ao vivo em 2026-08-31: diferença = exatamente o total de Vale Transporte,
+    que não entra em custo_empresa_estimado na fonte):
+      Salário            = salario_bruto
+      Encargos            = valor_fgts + inss_patronal_estimado
+      Benefícios          = beneficios_empresa
+      Vale Transporte     = vale_transporte
+    """
+    query = """
+    WITH folha_mes AS (
+      SELECT *
+      FROM `business-intelligence-467516.dp_inchurch.folha_colaborador`
+      WHERE competencia = (
+        SELECT MAX(competencia) FROM `business-intelligence-467516.dp_inchurch.folha_colaborador`
+      )
+    ),
+    folha_clt AS (
+      SELECT f.*
+      FROM folha_mes f
+      LEFT JOIN `business-intelligence-467516.dp_inchurch.cadastro_colaborador` cc
+        ON REGEXP_REPLACE(cc.cpf_cnpj, r'[^0-9]', '') = REGEXP_REPLACE(f.cpf, r'[^0-9]', '')
+       AND cc.situacao = 'ATIVO'
+      WHERE cc.contrato IS NULL OR cc.contrato != 'Sócio'
+    )
+    SELECT categoria, SUM(valor) AS valor
+    FROM (
+      SELECT 'Salário' AS categoria, salario_bruto AS valor FROM folha_clt
+      UNION ALL
+      SELECT 'Encargos (INSS + FGTS Patronal)', COALESCE(valor_fgts,0) + COALESCE(inss_patronal_estimado,0) FROM folha_clt
+      UNION ALL
+      SELECT 'Benefícios', COALESCE(beneficios_empresa,0) FROM folha_clt
+      UNION ALL
+      SELECT 'Vale Transporte', COALESCE(vale_transporte,0) FROM folha_clt
+    )
     GROUP BY 1
     ORDER BY 2 DESC
     """

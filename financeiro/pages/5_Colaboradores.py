@@ -29,6 +29,7 @@ from utils.data import (
     chart_layout, mes_fmt_ordered,
     last_val, prev_val, delta_str, no_data, fmt_brl,
     load_colaboradores_mensal, load_mrr_por_colaborador, load_custo_por_centro_custo,
+    load_custo_clt_por_categoria,
 )
 
 inject_css()
@@ -39,9 +40,10 @@ st.caption("Últimos 18 meses · Fonte: Plataforma DP InChurch (dp_inchurch)")
 
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando dados de colaboradores..."):
-    df_headcount = load_colaboradores_mensal(n_meses=18)
-    df_mrr_colab = load_mrr_por_colaborador(n_meses=18)
-    df_custo_cc  = load_custo_por_centro_custo()
+    df_headcount    = load_colaboradores_mensal(n_meses=18)
+    df_mrr_colab    = load_mrr_por_colaborador(n_meses=18)
+    df_custo_cc     = load_custo_por_centro_custo()
+    df_custo_categ  = load_custo_clt_por_categoria()
 
 if df_headcount.empty:
     no_data("Nenhum dado de colaboradores encontrado.")
@@ -110,12 +112,13 @@ for bucket in COLAB_ORDER:
         name=COLAB_LABELS[bucket],
         marker_color=COLAB_COLORS[bucket],
     )
+fig = chart_layout(fig, height=420, legend_bottom=True)
 fig.update_layout(
     barmode="stack",
     xaxis=dict(categoryorder="array", categoryarray=x_order_hc, type="category"),
     yaxis=dict(title="Colaboradores"),
 )
-st.plotly_chart(chart_layout(fig, height=420, legend_bottom=True), use_container_width=True)
+st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
@@ -138,11 +141,12 @@ else:
         name="MRR / Colaborador",
         hovertemplate="R$ %{y:,.0f}<extra></extra>",
     )
+    fig = chart_layout(fig, height=380)
     fig.update_layout(
         xaxis=dict(categoryorder="array", categoryarray=x_order_mrr, type="category"),
         yaxis=dict(title="R$ / colaborador", tickprefix="R$ "),
     )
-    st.plotly_chart(chart_layout(fig, height=380), use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
     st.caption("MRR total ativo (vw-splgc-tabela_mrr_validos) ÷ headcount total (CLT + PJ + Outros) no início de cada mês.")
 
 st.divider()
@@ -165,13 +169,45 @@ else:
         text=[f"R$ {fmt_brl(v, 0)}" for v in df_custo_cc["custo_total"]],
         textposition="outside",
     )
+    fig = chart_layout(fig, height=max(380, 28 * len(df_custo_cc)))
     fig.update_layout(
-        height=max(380, 28 * len(df_custo_cc)),
-        yaxis=dict(autorange="reversed", type="category"),
-        xaxis=dict(title="Custo (R$)", tickprefix="R$ "),
+        yaxis=dict(autorange="reversed", type="category", title=""),
+        xaxis=dict(title="Custo (R$)", tickprefix="R$ ", type="linear"),
         margin=dict(l=4, r=60, t=32, b=8),
     )
-    st.plotly_chart(chart_layout(fig, height=max(380, 28 * len(df_custo_cc))), use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
 
     custo_total_geral = df_custo_cc["custo_total"].sum()
     st.metric("Custo Total (mês mais recente)", f"R$ {fmt_brl(custo_total_geral, 0)}")
+
+st.divider()
+
+# ─────────────────────────────────────────────
+# SEÇÃO 4 — Composição do Custo CLT por Categoria (snapshot mês mais recente)
+# Só CLT/Estágio/Jovem Aprendiz — PJ (1 valor de NF) e Sócio (remuneração
+# declarada) não têm essa quebra na fonte.
+# ─────────────────────────────────────────────
+st.subheader("Composição do Custo CLT por Categoria")
+st.caption("Snapshot do mês mais recente de folha_colaborador · Só CLT/Estágio/Jovem Aprendiz (PJ e Sócio não têm essa quebra na fonte)")
+
+if df_custo_categ.empty:
+    no_data("Nenhum dado de composição de custo CLT encontrado.")
+else:
+    categ_colors = [PALETTE[0], PALETTE[3], PALETTE[6], PALETTE[4]]
+    fig = go.Figure()
+    fig.add_bar(
+        x=df_custo_categ["valor"],
+        y=df_custo_categ["categoria"],
+        orientation="h",
+        marker_color=categ_colors[: len(df_custo_categ)],
+        text=[f"R$ {fmt_brl(v, 0)}" for v in df_custo_categ["valor"]],
+        textposition="outside",
+    )
+    fig = chart_layout(fig, height=max(280, 60 * len(df_custo_categ)))
+    fig.update_layout(
+        yaxis=dict(autorange="reversed", type="category", title=""),
+        xaxis=dict(title="Custo (R$)", tickprefix="R$ ", type="linear"),
+        margin=dict(l=4, r=60, t=32, b=8),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Encargos = FGTS + INSS Patronal estimado. Vale Transporte não entra no custo_empresa_estimado usado nas outras seções — por isso a soma aqui pode divergir ligeiramente do total da seção anterior.")
