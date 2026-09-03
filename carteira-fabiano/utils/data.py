@@ -259,7 +259,7 @@ def _entry_month_cte(entry_map: dict[str, str]) -> str:
 # QUERIES — CARTEIRA FABIANO
 # ─────────────────────────────────────────────
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_carteira_mensal() -> pd.DataFrame:
     """
     Receita 1.2.2 mês a mês dos clientes vendidos por Fabiano Lomar.
@@ -331,7 +331,7 @@ def load_carteira_mensal() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_carteira_clientes() -> pd.DataFrame:
     """
     Detalhamento por cliente: nome, data de entrada, meses faturados, receita total.
@@ -407,7 +407,7 @@ def load_carteira_clientes() -> pd.DataFrame:
     return df.sort_values("receita_liquidada", ascending=False)
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_carteira_detalhe_mensal() -> pd.DataFrame:
     """
     Receita 1.2.2 por cliente por mês, com flag de elegibilidade para comissão de carteira.

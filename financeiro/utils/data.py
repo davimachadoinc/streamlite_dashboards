@@ -1893,3 +1893,226 @@ def load_custo_por_categoria() -> pd.DataFrame:
     ORDER BY 2 DESC
     """
     return _bq_query(query, "bigquery_bi")
+
+
+# ─────────────────────────────────────────────
+# ── PÁGINA 6: LIFETIME (ANÁLISE DE SOBREVIVÊNCIA) ─
+# ─────────────────────────────────────────────
+# Spec completa (decidida em sessão /grill-me 2026-09-03): vault Obsidian,
+# G:\Meu Drive\Obisidian\Davi\Documentacoes\[FIN] Dashboard_Lifetime_Sobrevivencia.md
+
+RMST_HORIZONTES_MESES = [6, 12, 24, 36]
+_DIAS_POR_MES = 30.4368
+_LIFETIME_N_MIN = 5  # amostra mínima por plano pra entrar em curva/RMST
+
+
+@st.cache_data(ttl=72000)
+def load_lifetime_base() -> pd.DataFrame:
+    """
+    Base de sobrevivência: 1 linha por cliente (st_sincro_sac) com t0
+    (primeira liquidação, qualquer tipo), plano de entrada, última
+    liquidação de mensalidade (1.2.2) e data de desativação total. A
+    composição de evento/censura/duração é feita em Python
+    (compute_lifetime_survival), não aqui — mantém a lógica de negócio
+    legível e testável fora do SQL.
+
+    - t0 = MIN(dt_liquidacao_recb) de QUALQUER liquidação (inclusive Setup).
+    - Plano de entrada = classificação (_PLAN_CASE) da liquidação
+      reconhecível MAIS ANTIGA do cliente — não trava no mesmo dia do t0,
+      porque boa parte dos clientes paga o Setup isolado no dia 1 (t0), sem
+      nenhum item de plano no mesmo boleto; casar só no dia do t0 jogava a
+      maioria em 'outros' (medido: 55% -> 11% ao soltar essa trava).
+    - Desativação total = cliente sem NENHUMA linha de mensalidade ativa
+      hoje (`dt_fim_mens IS NULL`) em vw-splgc-tabela_mrr_validos, data =
+      COALESCE(dt_desativacao_sac, MAX(dt_fim_mens) das linhas encerradas).
+      dt_desativacao_sac é um campo do CLIENTE (não do produto), então não
+      precisa da máquina de Branch 1/2/3 do churn-desativacoes — aquela
+      existe pra atribuir R$ perdido por produto/mês, não pra saber SE o
+      cliente ainda tem alguma mensalidade ativa.
+    """
+    query = f"""
+    WITH liq AS (
+      SELECT DISTINCT
+        st_sincro_sac,
+        CAST(dt_liquidacao_recb AS DATE) AS dt_liq,
+        comp_st_conta_cont,
+        comp_st_descricao_prd,
+        comp_valor
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_liquidacao-all`
+      WHERE SAFE_CAST(st_sincro_sac AS INT64) IS NOT NULL
+        AND comp_valor > 0
+    ),
+    primeira_liq AS (
+      SELECT st_sincro_sac, MIN(dt_liq) AS t0
+      FROM liq
+      GROUP BY st_sincro_sac
+    ),
+    plano_t0 AS (
+      SELECT
+        l.st_sincro_sac,
+        {_PLAN_CASE.format(col="l.comp_st_descricao_prd")} AS plano
+      FROM liq l
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY l.st_sincro_sac
+        ORDER BY
+          CASE WHEN {_PLAN_CASE.format(col="l.comp_st_descricao_prd")} != 'outros' THEN 0 ELSE 1 END,
+          l.dt_liq ASC,
+          l.comp_valor DESC
+      ) = 1
+    ),
+    ultima_mensalidade AS (
+      SELECT st_sincro_sac, MAX(dt_liq) AS ultima_liq_mensalidade
+      FROM liq
+      WHERE comp_st_conta_cont = '1.2.2'
+      GROUP BY st_sincro_sac
+    ),
+    mrr_ativo AS (
+      SELECT DISTINCT st_sincro_sac
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NULL
+        AND valor_total > 0
+        AND st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND {_EXCL_NAO_MENSALIDADE.format(col="st_descricao_prd")}
+    ),
+    mrr_ultima_fim AS (
+      SELECT st_sincro_sac, MAX(CAST(dt_fim_mens AS DATE)) AS max_fim
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NOT NULL
+        AND valor_total > 0
+        AND st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND {_EXCL_NAO_MENSALIDADE.format(col="st_descricao_prd")}
+      GROUP BY st_sincro_sac
+    ),
+    clientes_sac AS (
+      SELECT st_sincro_sac, CAST(dt_desativacao_sac AS DATE) AS dt_desativacao_sac
+      FROM `business-intelligence-467516.Splgc.splgc-clientes-inchurch`
+      WHERE dt_desativacao_sac IS NOT NULL
+    ),
+    desativacao_total AS (
+      SELECT
+        pl.st_sincro_sac,
+        COALESCE(cs.dt_desativacao_sac, mf.max_fim) AS data_desativacao
+      FROM primeira_liq pl
+      LEFT JOIN mrr_ultima_fim mf USING (st_sincro_sac)
+      LEFT JOIN clientes_sac   cs USING (st_sincro_sac)
+      LEFT JOIN mrr_ativo      ma USING (st_sincro_sac)
+      WHERE ma.st_sincro_sac IS NULL
+        AND (mf.max_fim IS NOT NULL OR cs.dt_desativacao_sac IS NOT NULL)
+    )
+    SELECT
+      pl.st_sincro_sac,
+      pt.plano,
+      pl.t0,
+      um.ultima_liq_mensalidade,
+      dt.data_desativacao
+    FROM primeira_liq pl
+    LEFT JOIN plano_t0           pt USING (st_sincro_sac)
+    LEFT JOIN ultima_mensalidade um USING (st_sincro_sac)
+    LEFT JOIN desativacao_total  dt USING (st_sincro_sac)
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["t0"] = pd.to_datetime(df["t0"])
+        df["ultima_liq_mensalidade"] = pd.to_datetime(df["ultima_liq_mensalidade"])
+        df["data_desativacao"] = pd.to_datetime(df["data_desativacao"])
+        df["plano"] = df["plano"].fillna("outros")
+    return df
+
+
+def compute_lifetime_survival(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aplica a lógica de evento/censura/duração sobre a base crua de
+    load_lifetime_base(). Regras (spec completa no vault Obsidian):
+
+    - Sem NENHUMA liquidação de mensalidade → perda imediata (duration=0):
+      cliente que só pagou Setup/Adesão, nunca sustentou assinatura.
+    - Inadimplência: >=90 dias corridos desde a última liquidação de
+      mensalidade (dt_liquidacao_recb — nunca fl_status_recb, que reflete
+      estado atual, não histórico).
+    - Desativação: cliente sem nenhuma linha de mensalidade ativa hoje.
+    - Perda = desativação OU inadimplência (90d). Data do evento, quando os
+      dois disparam: a mais antiga das duas — captura o momento real em que
+      o cliente parou de gerar valor, sem esperar a burocracia da
+      desativação formal (que sabemos que atrasa, ver churn-desativacoes.md).
+    - Sem nenhum critério disparado → censurado hoje (Kaplan-Meier).
+    """
+    if df.empty:
+        return df
+
+    df = df.copy()
+    hoje = pd.Timestamp(date.today())
+
+    tem_mensalidade = df["ultima_liq_mensalidade"].notna()
+    dias_sem_pagar = (hoje - df["ultima_liq_mensalidade"]).dt.days
+    inadimplente_90d = tem_mensalidade & (dias_sem_pagar >= 90)
+    tem_desativacao = df["data_desativacao"].notna()
+
+    evento = (~tem_mensalidade) | tem_desativacao | inadimplente_90d
+
+    data_evento = pd.Series(hoje, index=df.index)
+    mask = inadimplente_90d & ~tem_desativacao
+    data_evento[mask] = df.loc[mask, "ultima_liq_mensalidade"]
+    mask = tem_desativacao & ~inadimplente_90d
+    data_evento[mask] = df.loc[mask, "data_desativacao"]
+    mask = tem_desativacao & inadimplente_90d
+    data_evento[mask] = df.loc[mask, ["data_desativacao", "ultima_liq_mensalidade"]].min(axis=1)
+    mask = ~tem_mensalidade
+    data_evento[mask] = df.loc[mask, "t0"]
+
+    duration_dias = (data_evento - df["t0"]).dt.days.clip(lower=0)
+
+    df["evento"] = evento.astype(int)
+    df["data_evento"] = data_evento
+    df["duration_dias"] = duration_dias
+    df["duration_meses"] = duration_dias / _DIAS_POR_MES
+    return df
+
+
+def fit_km_por_plano(df: pd.DataFrame, n_min: int = _LIFETIME_N_MIN) -> dict:
+    """
+    Um KaplanMeierFitter por plano (só planos com >= n_min clientes).
+    Retorna {plano: (kmf, n_clientes)}.
+    """
+    from lifelines import KaplanMeierFitter
+
+    resultado = {}
+    for plano, grupo in df.groupby("plano"):
+        if len(grupo) < n_min:
+            continue
+        kmf = KaplanMeierFitter()
+        kmf.fit(grupo["duration_meses"], event_observed=grupo["evento"], label=plano)
+        resultado[plano] = (kmf, len(grupo))
+    return resultado
+
+
+def compute_rmst_snapshots(
+    df: pd.DataFrame,
+    horizontes: list[int] = RMST_HORIZONTES_MESES,
+    n_min: int = _LIFETIME_N_MIN,
+) -> pd.DataFrame:
+    """
+    RMST (restricted mean survival time, em meses) por plano, em cada
+    horizonte de `horizontes`. Omite (None) horizontes maiores que o maior
+    tempo observado (evento ou censura) naquele plano — evita RMST
+    calculado sobre extrapolação (ex: plano com pouco tempo de mercado
+    ainda não tem follow-up de 24/36 meses). Ver spec no vault.
+    """
+    from lifelines import KaplanMeierFitter
+    from lifelines.utils import restricted_mean_survival_time
+
+    linhas = []
+    for plano, grupo in df.groupby("plano"):
+        if len(grupo) < n_min:
+            continue
+        max_obs = grupo["duration_meses"].max()
+        kmf = KaplanMeierFitter()
+        kmf.fit(grupo["duration_meses"], event_observed=grupo["evento"])
+        linha = {"plano": plano, "n_clientes": len(grupo)}
+        for tau in horizontes:
+            linha[f"rmst_{tau}m"] = (
+                restricted_mean_survival_time(kmf, t=tau) if max_obs >= tau else None
+            )
+        linhas.append(linha)
+    return pd.DataFrame(linhas)

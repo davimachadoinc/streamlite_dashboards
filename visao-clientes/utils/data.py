@@ -120,6 +120,82 @@ _PLAN_CASE = """
     END
 """
 
+# ─────────────────────────────────────────────
+# BRANCH 3 — cliente desativado SEM NENHUMA linha em vw-splgc-tabela_mrr_validos
+# (nem com dt_fim_mens IS NULL) cuja ÚNICA liquidação paga > 0 não é mensalidade
+# (Setup/Adesão/etc). Valor vem de `vw-splgc-tabela_mrr_e_descricao` (view sobre a
+# tabela NÃO filtrada `splgc-tabela_mrr` que já traz st_descricao_prd real — inclui
+# MRR nunca liquidado). Sem isso o cliente some do churn inteiro — bug descoberto
+# ago/2026 (caso ADEPI, 102 clientes afetados). Ver churn-desativacoes.md no vault
+# Obsidian para o diagnóstico completo e a regra de negócio.
+# ─────────────────────────────────────────────
+_EXCL_LIQUIDACAO_NAO_MENSALIDADE = """
+    (   liq.comp_st_descricao_prd LIKE '%Setup%'
+     OR liq.comp_st_descricao_prd LIKE '%[PRO-RATA]%'
+     OR liq.comp_st_descricao_prd LIKE '%Desconto%'
+     OR liq.comp_st_descricao_prd LIKE '%Abono%'
+     OR liq.comp_st_descricao_prd LIKE '%Intermedia%'
+     OR liq.comp_st_descricao_prd LIKE 'Especialista%'
+     OR liq.comp_st_descricao_prd LIKE 'Acordo%'
+     OR liq.comp_st_descricao_prd LIKE 'Reajuste%'
+     OR liq.comp_st_descricao_prd LIKE '%Multa%'
+     OR liq.comp_st_descricao_prd LIKE '%Ades%'
+     OR liq.comp_st_descricao_prd LIKE '%Juros%'
+     OR liq.comp_st_descricao_prd LIKE '%Taxa banc%'
+     OR liq.comp_st_descricao_prd LIKE 'PLANO MENSAL'
+    )
+"""
+
+_BRANCH3_LIQUIDACAO_UNICA = """
+      UNION ALL
+      -- Clientes desativados SEM NENHUMA linha em vw-splgc-tabela_mrr_validos cuja
+      -- UNICA liquidacao paga > 0 nao e mensalidade (Setup/Adesao) -- valor vem de
+      -- vw-splgc-tabela_mrr_e_descricao (nao filtrada). Ver churn-desativacoes.md
+      -- (vault, ago/2026).
+      SELECT
+        mrr.st_sincro_sac,
+        mrr.st_descricao_prd,
+        CAST(c.dt_desativacao_sac AS DATE)                    AS dt_fim,
+        DATE_TRUNC(CAST(c.dt_desativacao_sac AS DATE), MONTH) AS mes,
+        mrr.valor_total
+      FROM `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+      INNER JOIN (
+        SELECT
+          st_sincro_sac, st_descricao_prd, valor_total,
+          COALESCE(CAST(dt_fim_mens AS DATE), DATE '9999-12-31') AS fim_efetivo,
+          MAX(COALESCE(CAST(dt_fim_mens AS DATE), DATE '9999-12-31'))
+            OVER (PARTITION BY st_sincro_sac) AS max_fim
+        FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_e_descricao`
+        WHERE valor_total > 0
+          AND st_descricao_prd NOT LIKE '%Setup%'
+          AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+          AND st_descricao_prd NOT LIKE '%Desconto%'
+          AND st_descricao_prd NOT LIKE '%Abono%'
+          AND st_descricao_prd NOT LIKE '%Intermedia%'
+          AND st_descricao_prd NOT LIKE 'Especialista%'
+          AND st_descricao_prd NOT LIKE 'Acordo%'
+          AND st_descricao_prd NOT LIKE 'Reajuste%'
+      ) mrr
+        ON mrr.st_sincro_sac = c.st_sincro_sac AND mrr.fim_efetivo = mrr.max_fim
+      WHERE c.dt_desativacao_sac IS NOT NULL
+        AND CAST(c.dt_desativacao_sac AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL {janela_meses} MONTH)
+        AND CAST(c.dt_desativacao_sac AS DATE) <= LAST_DAY(CURRENT_DATE())
+        AND NOT EXISTS (
+          SELECT 1 FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` v
+          WHERE v.st_sincro_sac = c.st_sincro_sac
+        )
+        AND (
+          SELECT COUNT(*) FROM `business-intelligence-467516.Splgc.splgc-cobrancas_liquidacao-all` liq
+          WHERE liq.st_sincro_sac = c.st_sincro_sac AND liq.comp_valor > 0
+        ) = 1
+        AND EXISTS (
+          SELECT 1 FROM `business-intelligence-467516.Splgc.splgc-cobrancas_liquidacao-all` liq
+          WHERE liq.st_sincro_sac = c.st_sincro_sac AND liq.comp_valor > 0
+            AND {excl_liquidacao}
+        )
+        {filtro_extra}
+"""
+
 
 # ─────────────────────────────────────────────
 # LAYOUT PADRÃO DE GRÁFICOS
@@ -249,7 +325,7 @@ def _bq_query(query: str, project_key: str = "bigquery_tech") -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # ── PÁGINA 1: CLIENTES (MRR ativo + transacionado) ───
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_mrr_ativo_por_igreja() -> pd.DataFrame:
     """
     MRR ativo hoje por igreja: soma de todas as linhas de mensalidade vigentes
@@ -308,7 +384,7 @@ def load_mrr_ativo_por_igreja() -> pd.DataFrame:
     return _bq_query(query, "bigquery_bi")
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_empresas() -> pd.DataFrame:
     """Cadastro de igrejas (BQ_TECH) — id/nome da igreja e da denominação (subgroup)."""
     query = """
@@ -318,7 +394,7 @@ def load_empresas() -> pd.DataFrame:
     return _bq_query(query, "bigquery_tech")
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_transacionado_diario() -> pd.DataFrame:
     """
     TPV diário por igreja, últimos 6 meses (mês atual incluso, ainda que
@@ -437,7 +513,7 @@ def _format_nome_igreja(row) -> str:
     return row.get("st_sincro_sac")
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_visao_clientes() -> pd.DataFrame:
     """
     Junta MRR ativo (BQ_BI) com cadastro oficial (BQ_TECH) e a série diária de
@@ -510,7 +586,7 @@ def load_visao_clientes() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # ── PÁGINA 2: DESATIVAÇÕES (portado do dashboard Financeiro) ───
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_desativacoes_mensais() -> pd.DataFrame:
     """
     MRR perdido e clientes desativados por módulo por mês (últimos 15 meses).
@@ -580,6 +656,7 @@ def load_desativacoes_mensais() -> pd.DataFrame:
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
       ) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=15, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="")}
     ),
     renovacoes AS (
       -- (cliente, família de produto) com dt_fim no último dia do mês
@@ -627,7 +704,7 @@ def load_desativacoes_mensais() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_desativacoes_total_parcial() -> pd.DataFrame:
     """
     Desativações por mês classificadas em Total (cliente sem nenhum produto de
@@ -685,6 +762,7 @@ def load_desativacoes_total_parcial() -> pd.DataFrame:
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
       ) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=15, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="AND " + _EXCL_NAO_MENSALIDADE.format(col="mrr.st_descricao_prd"))}
     ),
     renovacoes AS (
       SELECT DISTINCT
@@ -734,7 +812,7 @@ def load_desativacoes_total_parcial() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_desativacoes_por_plano() -> pd.DataFrame:
     """
     Desativações de PLANO BASE por mês (exclui módulos).
@@ -793,6 +871,7 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
       ) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=15, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="AND " + _EXCL_MODULOS.format(col="mrr.st_descricao_prd") + " AND " + _EXCL_NAO_MENSALIDADE.format(col="mrr.st_descricao_prd"))}
     ),
     renovacoes AS (
       -- Restrição de cardinalidade 1:1 evita casar em massa clientes com vários
@@ -830,7 +909,7 @@ def load_desativacoes_por_plano() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_desativacoes_detalhado() -> pd.DataFrame:
     """
     Desativações no nível de cliente — mês, módulo, plano, nome e MRR perdido.
@@ -888,6 +967,7 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
         PARTITION BY m.st_sincro_sac, m.st_descricao_prd
         ORDER BY m.dt_inicio_mens DESC
       ) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=15, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="AND " + _EXCL_NAO_MENSALIDADE.format(col="mrr.st_descricao_prd"))}
     ),
     renovacoes AS (
       -- Restrição de cardinalidade 1:1 evita casar em massa clientes com vários
@@ -936,7 +1016,7 @@ def load_desativacoes_detalhado() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_base_ativa_por_plano() -> pd.DataFrame:
     """
     Clientes ativos por PLANO BASE no início de cada mês (últimos 15 meses).

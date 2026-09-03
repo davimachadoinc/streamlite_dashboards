@@ -133,6 +133,81 @@ _PLAN_CASE = """
     END
 """
 
+# ─────────────────────────────────────────────
+# BRANCH 3 — cliente desativado SEM NENHUMA linha em vw-splgc-tabela_mrr_validos
+# (nem com dt_fim_mens IS NULL) cuja ÚNICA liquidação paga > 0 não é mensalidade
+# (Setup/Adesão/etc). Valor vem de `vw-splgc-tabela_mrr_e_descricao` (view sobre a
+# tabela NÃO filtrada `splgc-tabela_mrr` que já traz st_descricao_prd real — inclui
+# MRR nunca liquidado). Sem isso o cliente some do churn inteiro — bug descoberto
+# ago/2026 (caso ADEPI, 102 clientes afetados). Ver churn-desativacoes.md no vault
+# Obsidian para o diagnóstico completo e a regra de negócio.
+# ─────────────────────────────────────────────
+_EXCL_LIQUIDACAO_NAO_MENSALIDADE = """
+    (   liq.comp_st_descricao_prd LIKE '%Setup%'
+     OR liq.comp_st_descricao_prd LIKE '%[PRO-RATA]%'
+     OR liq.comp_st_descricao_prd LIKE '%Desconto%'
+     OR liq.comp_st_descricao_prd LIKE '%Abono%'
+     OR liq.comp_st_descricao_prd LIKE '%Intermedia%'
+     OR liq.comp_st_descricao_prd LIKE 'Especialista%'
+     OR liq.comp_st_descricao_prd LIKE 'Acordo%'
+     OR liq.comp_st_descricao_prd LIKE 'Reajuste%'
+     OR liq.comp_st_descricao_prd LIKE '%Multa%'
+     OR liq.comp_st_descricao_prd LIKE '%Ades%'
+     OR liq.comp_st_descricao_prd LIKE '%Juros%'
+     OR liq.comp_st_descricao_prd LIKE '%Taxa banc%'
+     OR liq.comp_st_descricao_prd LIKE 'PLANO MENSAL'
+    )
+"""
+
+_BRANCH3_LIQUIDACAO_UNICA = """
+      UNION ALL
+      -- Clientes desativados SEM NENHUMA linha em vw-splgc-tabela_mrr_validos cuja
+      -- UNICA liquidacao paga > 0 nao e mensalidade (Setup/Adesao) -- valor vem de
+      -- vw-splgc-tabela_mrr_e_descricao (nao filtrada). Ver churn-desativacoes.md
+      -- (vault, ago/2026).
+      SELECT
+        mrr.st_sincro_sac,
+        mrr.st_descricao_prd,
+        CAST(c.dt_desativacao_sac AS DATE)                    AS dt_fim,
+        DATE_TRUNC(CAST(c.dt_desativacao_sac AS DATE), MONTH) AS mes,
+        mrr.valor_total
+      FROM `business-intelligence-467516.Splgc.splgc-clientes-inchurch` c
+      INNER JOIN (
+        SELECT
+          st_sincro_sac, st_descricao_prd, valor_total,
+          COALESCE(CAST(dt_fim_mens AS DATE), DATE '9999-12-31') AS fim_efetivo,
+          MAX(COALESCE(CAST(dt_fim_mens AS DATE), DATE '9999-12-31'))
+            OVER (PARTITION BY st_sincro_sac) AS max_fim
+        FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_e_descricao`
+        WHERE valor_total > 0
+          AND st_descricao_prd NOT LIKE '%Setup%'
+          AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+          AND st_descricao_prd NOT LIKE '%Desconto%'
+          AND st_descricao_prd NOT LIKE '%Abono%'
+          AND st_descricao_prd NOT LIKE '%Intermedia%'
+          AND st_descricao_prd NOT LIKE 'Especialista%'
+          AND st_descricao_prd NOT LIKE 'Acordo%'
+          AND st_descricao_prd NOT LIKE 'Reajuste%'
+      ) mrr
+        ON mrr.st_sincro_sac = c.st_sincro_sac AND mrr.fim_efetivo = mrr.max_fim
+      WHERE c.dt_desativacao_sac IS NOT NULL
+        AND CAST(c.dt_desativacao_sac AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL {janela_meses} MONTH)
+        AND NOT EXISTS (
+          SELECT 1 FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` v
+          WHERE v.st_sincro_sac = c.st_sincro_sac
+        )
+        AND (
+          SELECT COUNT(*) FROM `business-intelligence-467516.Splgc.splgc-cobrancas_liquidacao-all` liq
+          WHERE liq.st_sincro_sac = c.st_sincro_sac AND liq.comp_valor > 0
+        ) = 1
+        AND EXISTS (
+          SELECT 1 FROM `business-intelligence-467516.Splgc.splgc-cobrancas_liquidacao-all` liq
+          WHERE liq.st_sincro_sac = c.st_sincro_sac AND liq.comp_valor > 0
+            AND {excl_liquidacao}
+        )
+        {filtro_extra}
+"""
+
 _FAIXA_CASE = """
     CASE
       WHEN {col} LIKE '%1 - 100%'    OR {col} LIKE '%1 a 100%'       THEN '1-100'
@@ -337,7 +412,7 @@ def _download_file(file_id: str) -> bytes:
 # ─────────────────────────────────────────────
 # QUERY 1 — MRR WATERFALL MENSAL
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_mrr_waterfall() -> pd.DataFrame:
     """
     Retorna por mês (últimos 18 meses):
@@ -564,6 +639,7 @@ def load_mrr_waterfall() -> pd.DataFrame:
         AND m.valor_total > 0
         AND {_EXCL_NAO_MENSALIDADE.format(col="m.st_descricao_prd")}
       QUALIFY ROW_NUMBER() OVER (PARTITION BY m.st_sincro_sac, m.st_descricao_prd ORDER BY m.dt_inicio_mens DESC) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=17, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="AND " + _EXCL_NAO_MENSALIDADE.format(col="mrr.st_descricao_prd"))}
     ),
     renovacoes_churn AS (
       SELECT DISTINCT d.st_sincro_sac, d.st_descricao_prd, d.mes
@@ -622,7 +698,7 @@ def load_mrr_waterfall() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY 2 — MRR ATIVO POR PLANO (snapshot)
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_mrr_por_plano() -> pd.DataFrame:
     """MRR ativo no início de cada mês por plano base (últimos 18 meses)."""
     query = f"""
@@ -657,7 +733,7 @@ def load_mrr_por_plano() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY 3 — NOVOS CLIENTES POR PLANO
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_new_logos_por_plano() -> pd.DataFrame:
     """Clientes novos por plano por mês — primeiro produto ativado (últimos 18 meses)."""
     query = f"""
@@ -696,7 +772,7 @@ def load_new_logos_por_plano() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY 4 — EXPANSION MRR POR MÓDULO/TIPO
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_expansion_por_modulo() -> pd.DataFrame:
     """
     Expansion MRR por tipo de upsell (módulo ou upgrade de plano) por mês.
@@ -763,7 +839,7 @@ def load_expansion_por_modulo() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY 4b — EXPANSION DETALHADO (drill-down)
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_expansion_detalhado() -> pd.DataFrame:
     """Expansion por cliente e produto — últimos 6 meses, sem agregar."""
     query = """
@@ -827,7 +903,7 @@ def load_expansion_detalhado() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY 5 — CHURN POR PLANO
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_churn_por_plano() -> pd.DataFrame:
     """
     Desativações de plano base por mês — MRR perdido e clientes (últimos 18 meses).
@@ -877,6 +953,7 @@ def load_churn_por_plano() -> pd.DataFrame:
         AND m.valor_total > 0
         AND {_EXCL_NAO_MENSALIDADE.format(col="m.st_descricao_prd")}
       QUALIFY ROW_NUMBER() OVER (PARTITION BY m.st_sincro_sac, m.st_descricao_prd ORDER BY m.dt_inicio_mens DESC) = 1
+      {_BRANCH3_LIQUIDACAO_UNICA.format(janela_meses=17, excl_liquidacao=_EXCL_LIQUIDACAO_NAO_MENSALIDADE, filtro_extra="AND " + _EXCL_MODULOS.format(col="mrr.st_descricao_prd") + " AND " + _EXCL_NAO_MENSALIDADE.format(col="mrr.st_descricao_prd"))}
     ),
     renovacoes AS (
       -- Restrição de cardinalidade 1:1 evita casar em massa clientes com vários
@@ -914,7 +991,7 @@ def load_churn_por_plano() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY 6 — BASE ATIVA POR PLANO (para churn %)
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_base_ativa_por_plano() -> pd.DataFrame:
     """Clientes ativos por plano no início de cada mês (últimos 18 meses)."""
     query = f"""
@@ -949,7 +1026,7 @@ def load_base_ativa_por_plano() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY 7 — ATTACH RATE DE MÓDULOS
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_module_attach_rate() -> pd.DataFrame:
     """
     Para cada mês: % da base de clientes ativos que tem cada módulo ativo.
@@ -1024,7 +1101,7 @@ def load_module_attach_rate() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY 8 — TEMPO ATÉ PRIMEIRO UPSELL
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_upsell_timing() -> pd.DataFrame:
     """
     Dias entre o primeiro produto ativado e o primeiro upsell por cliente.
@@ -1243,7 +1320,7 @@ def load_fechamentos_vendas() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY — FECHADO VS MRR ATUAL
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_fechamentos_vs_mrr_atual() -> pd.DataFrame:
     """
     Junta cada fechamento com o MRR ativo atual do cliente no Superlógica.
@@ -1301,7 +1378,7 @@ def load_fechamentos_vs_mrr_atual() -> pd.DataFrame:
 # ─────────────────────────────────────────────
 # QUERY — UPGRADE DE PLANO DETALHADO
 # ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=72000)
 def load_upgrade_detalhado() -> pd.DataFrame:
     """
     Para cada evento de expansion de plano base (não módulo), identifica
