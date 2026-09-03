@@ -2094,8 +2094,12 @@ def compute_rmst_snapshots(
 ) -> pd.DataFrame:
     """
     RMST (restricted mean survival time, em meses) por plano, em cada
-    horizonte de `horizontes`. Omite (None) horizontes maiores que o maior
-    tempo observado (evento ou censura) naquele plano — evita RMST
+    horizonte de `horizontes`, mais o **RMST completo** (`rmst_completo`) —
+    a área sob a curva até o maior tempo observado (`max_obs_meses`) daquele
+    plano, a melhor estimativa disponível de "tempo médio de vida" quando
+    nem todo mundo já teve o evento de perda (impossível calcular uma média
+    de verdade sem essa restrição, porque a cauda direita é censurada).
+    Horizontes fixos maiores que `max_obs_meses` ficam None — evita RMST
     calculado sobre extrapolação (ex: plano com pouco tempo de mercado
     ainda não tem follow-up de 24/36 meses). Ver spec no vault.
     """
@@ -2109,7 +2113,12 @@ def compute_rmst_snapshots(
         max_obs = grupo["duration_meses"].max()
         kmf = KaplanMeierFitter()
         kmf.fit(grupo["duration_meses"], event_observed=grupo["evento"])
-        linha = {"plano": plano, "n_clientes": len(grupo)}
+        linha = {
+            "plano": plano,
+            "n_clientes": len(grupo),
+            "max_obs_meses": max_obs,
+            "rmst_completo": restricted_mean_survival_time(kmf, t=max_obs),
+        }
         for tau in horizontes:
             linha[f"rmst_{tau}m"] = (
                 restricted_mean_survival_time(kmf, t=tau) if max_obs >= tau else None

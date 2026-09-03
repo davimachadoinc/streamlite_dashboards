@@ -63,10 +63,16 @@ with k3:
 rmst_geral = compute_rmst_snapshots(df.assign(plano="Todos os clientes"), n_min=1)
 
 if not rmst_geral.empty:
-    st.markdown("**Tempo médio de vida esperado (RMST) — todos os clientes**")
-    cols = st.columns(len(RMST_HORIZONTES_MESES))
+    st.markdown("**Tempo médio de vida esperado — todos os clientes**")
     row = rmst_geral.iloc[0]
-    for col, tau in zip(cols, RMST_HORIZONTES_MESES):
+    cols = st.columns(1 + len(RMST_HORIZONTES_MESES))
+    with cols[0]:
+        st.metric(
+            "Tempo médio (RMST completo)",
+            f"{row['rmst_completo']:.1f} meses",
+            help=f"Follow-up disponível: até {row['max_obs_meses']:.0f} meses",
+        )
+    for col, tau in zip(cols[1:], RMST_HORIZONTES_MESES):
         val = row.get(f"rmst_{tau}m")
         with col:
             st.metric(f"RMST @ {tau} meses", f"{val:.1f} meses" if val is not None else "—")
@@ -100,23 +106,31 @@ else:
             mode="lines", line=dict(color=cor, width=2, shape="hv"),
             hovertemplate="%{x:.0f} meses<br>%{y:.1f}% ainda ativos<extra>" + label + "</extra>",
         )
+    # chart_layout() PRECISA vir antes do update_layout customizado — ele
+    # redefine xaxis.type="category" e title="" (padrão pensado pra gráficos
+    # de série mensal), sobrescrevendo qualquer eixo customizado setado
+    # depois. Mesmo gotcha já documentado nas Páginas 2 e 5 deste dashboard.
+    fig = chart_layout(fig, height=440, legend_bottom=True)
     fig.update_layout(
         yaxis=dict(title="% de clientes ainda ativos", ticksuffix="%", range=[0, 100]),
         xaxis=dict(title="Meses desde a primeira liquidação (t0)", type="linear"),
     )
-    st.plotly_chart(chart_layout(fig, height=440, legend_bottom=True), use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
 # ─────────────────────────────────────────────
-# SNAPSHOTS DE RMST POR PLANO
+# TEMPO MÉDIO DE VIDA POR PLANO (RMST completo)
 # ─────────────────────────────────────────────
-st.subheader("Snapshots de RMST (tempo médio de sobrevida restrito) por Plano")
+st.subheader("Tempo Médio de Vida Estimado por Plano")
 st.caption(
-    "RMST em horizontes fixos (6/12/24/36 meses) — mais robusto que uma média "
-    "'cheia', que fica instável quando poucos clientes têm tenure muito longa. "
-    "Horizonte fica em branco quando o plano ainda não tem follow-up suficiente "
-    "para alcançá-lo (ex: planos novos)."
+    "RMST completo: área sob a curva de sobrevivência até o maior tempo "
+    "observado naquele plano — a melhor estimativa disponível de \"tempo "
+    "médio de vida\", já que uma média de verdade não existe enquanto parte "
+    "da base ainda está ativa (censurada). Planos com follow-up mais curto "
+    "(ex: lançados recentemente) tendem a mostrar um número menor aqui — "
+    "não porque duram menos, mas porque ainda não houve tempo de observar "
+    "mais."
 )
 
 df_rmst = compute_rmst_snapshots(df)
@@ -124,19 +138,43 @@ df_rmst = compute_rmst_snapshots(df)
 if df_rmst.empty:
     no_data("Nenhum plano com amostra suficiente para RMST.")
 else:
-    df_show = df_rmst.copy()
-    df_show["Plano"] = df_show["plano"].map(PLAN_LABELS).fillna(df_show["plano"])
-    df_show = df_show.sort_values("n_clientes", ascending=False)
+    df_rmst_sorted = df_rmst.sort_values("n_clientes", ascending=False)
+    cols_medio = st.columns(len(df_rmst_sorted))
+    for col, (_, row) in zip(cols_medio, df_rmst_sorted.iterrows()):
+        label = PLAN_LABELS.get(row["plano"], row["plano"].title())
+        with col:
+            st.metric(
+                f"{label} (n={int(row['n_clientes'])})",
+                f"{row['rmst_completo']:.1f} meses",
+                help=f"Follow-up disponível: até {row['max_obs_meses']:.0f} meses",
+            )
 
-    cols_order = ["Plano", "n_clientes"] + [f"rmst_{t}m" for t in RMST_HORIZONTES_MESES]
+    st.markdown("**Snapshots de RMST em horizontes fixos**")
+    st.caption(
+        "Mais robusto que o RMST completo pra COMPARAR planos entre si — usa "
+        "o mesmo horizonte pra todos, em vez do maior tempo observado de "
+        "cada um (que varia por plano). Fica em branco quando o plano ainda "
+        "não tem follow-up suficiente pra alcançar aquele horizonte."
+    )
+
+    df_show = df_rmst_sorted.copy()
+    df_show["Plano"] = df_show["plano"].map(PLAN_LABELS).fillna(df_show["plano"])
+
+    cols_order = ["Plano", "n_clientes", "max_obs_meses", "rmst_completo"] + [
+        f"rmst_{t}m" for t in RMST_HORIZONTES_MESES
+    ]
     df_show = df_show[cols_order]
 
-    rename_map = {"n_clientes": "Clientes"}
+    rename_map = {
+        "n_clientes": "Clientes",
+        "max_obs_meses": "Follow-up (meses)",
+        "rmst_completo": "RMST completo",
+    }
     rename_map.update({f"rmst_{t}m": f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES})
     df_show = df_show.rename(columns=rename_map)
 
-    for t in RMST_HORIZONTES_MESES:
-        col = f"RMST @ {t}m"
+    df_show["Follow-up (meses)"] = df_show["Follow-up (meses)"].apply(lambda v: f"{v:.0f}")
+    for col in ["RMST completo"] + [f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES]:
         df_show[col] = df_show[col].apply(lambda v: f"{v:.1f} meses" if pd.notna(v) else "—")
 
     st.dataframe(df_show, use_container_width=True, hide_index=True)
