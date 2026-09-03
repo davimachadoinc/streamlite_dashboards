@@ -36,6 +36,41 @@ st.caption(
     "perda = desativação total OU 90 dias sem liquidar mensalidade."
 )
 
+with st.expander("💡 O que é RMST? (explicação sem jargão)", expanded=True):
+    st.markdown(
+        """
+        As métricas desta página usam uma sigla técnica, **RMST**, que aparece em vários
+        lugares abaixo. Aqui vai a versão simples do que ela significa.
+
+        **O problema que o RMST resolve:** pra saber "quanto tempo, em média, um cliente
+        fica ativo", o jeito óbvio seria pegar todo mundo que já cancelou, somar o tempo
+        que cada um durou e dividir pela quantidade. O problema é que **boa parte dos
+        clientes ainda não cancelou** — estão pagando até hoje. Não dá pra ignorá-los (isso
+        jogaria a média pra baixo, contando só quem já morreu), mas também não dá pra fingir
+        que já sabemos quanto tempo mais eles vão durar.
+
+        **A solução:** é a mesma lógica usada para calcular a **expectativa de vida de um
+        país** — ninguém espera todo mundo morrer para calcular isso. Olha-se para a fração
+        de pessoas que continua viva a cada ano (misturando quem já morreu com quem ainda
+        está vivo) e soma-se essas frações ao longo do tempo. O **RMST faz exatamente isso
+        com clientes**: soma, mês a mês, a fração de clientes que ainda continua ativa — o
+        resultado dá um número em **meses**, que é a melhor estimativa de "vida útil média"
+        disponível com os dados que já temos.
+
+        **Por que "restrito" (o R de RMST)?** Porque essa soma precisa parar em algum ponto
+        (um "horizonte") — não dá pra somar até o infinito quando ainda não observamos
+        clientes durando pra sempre. Por isso as tabelas abaixo mostram o RMST em alguns
+        horizontes diferentes (6, 12, 24, 36 meses, e também um "RMST completo" que vai até
+        onde os dados permitem).
+
+        **Exemplo bem simples:** imagine 100 clientes que entraram juntos. No mês 1, 100%
+        ainda estão ativos. No mês 6, 80% seguem ativos. No mês 12, 50%. Somando essas
+        frações mês a mês (a "área" sob a curva de sobrevivência) até o mês 12, chegamos a
+        um RMST de, digamos, **8,5 meses** — que se lê como: *"em média, dentro do primeiro
+        ano, um cliente desse grupo fica ativo por 8,5 meses"*.
+        """
+    )
+
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando base de sobrevivência..."):
     df_base = load_lifetime_base()
