@@ -29,9 +29,14 @@ from utils.data import (
     fmt_int,
     fmt_pct,
     PALETTE_GREEN,
+    PALETTE_GREEN_LIGHT,
     CHART_TEMPLATE,
     MKT_JANELA_ANOS,
+    CAMPANHA_LABELS,
+    CAMPANHA_NAO_CLASSIFICADO,
 )
+
+MKT_DEFAULT_MESES = 13
 
 inject_css()
 
@@ -56,23 +61,38 @@ if df.empty:
 with st.sidebar:
     st.markdown("### 🔍 Filtros")
 
-    min_data, max_data = df["data_br"].min().date(), df["data_br"].max().date()
-    periodo = st.date_input(
-        "Período (data da conversão)",
-        value=(min_data, max_data),
-        min_value=min_data,
-        max_value=max_data,
+    campanha_opcoes = [CAMPANHA_LABELS["MEIO"], CAMPANHA_LABELS["TOPO"], CAMPANHA_NAO_CLASSIFICADO]
+    sel_campanha = st.pills(
+        "Campanha (Forms)",
+        campanha_opcoes,
+        selection_mode="multi",
+        default=campanha_opcoes,
+        help="Meio/Topo são os valores reais da fonte (não existe 'Fundo'). 'Não Classificado' "
+             "agrupa leads sem essa informação (~5% da base) — não fica escondido em nenhuma "
+             "das outras duas caixas.",
     )
 
-    sel_cargo = st.multiselect("Cargo", mkt_options(df, "cargo_norm"), placeholder="Todos")
     sel_tamanho = st.multiselect(
         "Tamanho da Igreja", mkt_options(df, "tamanho_igreja_norm"), placeholder="Todos",
         help="Valores normalizados (DE-PARA) — intervalos de esquemas de formulário diferentes "
              "(ex. '101-250' vs '101-300' vs '101-200') são mantidos separados, não são a mesma faixa.",
     )
+    sel_cargo = st.multiselect("Cargo", mkt_options(df, "cargo_norm"), placeholder="Todos")
+
+    min_data, max_data = df["data_br"].min().date(), df["data_br"].max().date()
+    _hoje = pd.Timestamp.now().normalize()
+    _default_inicio = max((_hoje.replace(day=1) - pd.DateOffset(months=MKT_DEFAULT_MESES)).date(), min_data)
+    periodo = st.date_input(
+        "Período (data da conversão)",
+        value=(_default_inicio, max_data),
+        min_value=min_data,
+        max_value=max_data,
+        help=f"Padrão: últimos {MKT_DEFAULT_MESES} meses completos + o mês corrente até hoje. "
+             "Pode ser expandido manualmente até o limite da janela travada acima.",
+    )
+
     sel_decisor = st.multiselect("Decisor", mkt_options(df, "decisor"), placeholder="Todos")
     sel_formulario = st.multiselect("Formulário", mkt_options(df, "id_formulario"), placeholder="Todos")
-    sel_campanha = st.multiselect("Campanha (forms)", mkt_options(df, "campanha_forms"), placeholder="Todas")
     sel_canal = st.multiselect("Canal", mkt_options(df, "canal"), placeholder="Todos")
 
     st.markdown("**UTMs**")
@@ -111,7 +131,7 @@ _sel_map = {
     "tamanho_igreja_norm": sel_tamanho,
     "decisor": sel_decisor,
     "id_formulario": sel_formulario,
-    "campanha_forms": sel_campanha,
+    "campanha_forms_disp": sel_campanha,
     "canal": sel_canal,
     "utm_source": sel_utm_source,
     "utm_medium": sel_utm_medium,
@@ -162,25 +182,40 @@ st.divider()
 
 # ── Tendência mensal ────────────────────────────
 st.markdown("### 📈 Conversões por Mês")
-mensal = (
-    work_df.groupby(work_df["mes_br"])
-    .size()
-    .reset_index(name="n")
-    .sort_values("mes_br")
+st.caption(
+    "Sempre no nível de conversão (não é afetado pelo toggle 'lead único', já que o conceito de "
+    "**Retorno** só existe olhando cada conversão individualmente). **Única** = 1ª conversão já "
+    "registrada daquele lead (`ordem_conversao_lead == 1`); **Retorno** = conversão de um lead que "
+    "já havia convertido antes."
 )
-fig_mensal = go.Figure(go.Bar(
-    x=mensal["mes_br"], y=mensal["n"],
-    marker_color=PALETTE_GREEN,
-    hovertemplate="<b>%{x|%b/%Y}</b><br>%{y} " + ("leads" if lead_unico else "conversões") + "<extra></extra>",
+_tipo = dfv["ordem_conversao_lead"].eq(1).map({True: "Única", False: "Retorno"})
+mensal = (
+    dfv.assign(_tipo=_tipo)
+    .groupby(["mes_br", "_tipo"])
+    .size()
+    .unstack("_tipo", fill_value=0)
+    .reindex(columns=["Única", "Retorno"], fill_value=0)
+    .sort_index()
+)
+fig_mensal = go.Figure()
+fig_mensal.add_trace(go.Bar(
+    x=mensal.index, y=mensal["Única"], name="Única", marker_color=PALETTE_GREEN,
+    hovertemplate="<b>%{x|%b/%Y}</b><br>Única: %{y}<extra></extra>",
+))
+fig_mensal.add_trace(go.Bar(
+    x=mensal.index, y=mensal["Retorno"], name="Retorno", marker_color=PALETTE_GREEN_LIGHT,
+    hovertemplate="<b>%{x|%b/%Y}</b><br>Retorno: %{y}<extra></extra>",
 ))
 fig_mensal.update_layout(
     template=CHART_TEMPLATE,
-    height=360,
+    barmode="stack",
+    height=380,
     margin=dict(l=4, r=4, t=16, b=8),
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="Outfit, sans-serif", color="#ffffff", size=12),
-    yaxis_title="Leads" if lead_unico else "Conversões",
+    yaxis_title="Conversões",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
 )
 st.plotly_chart(fig_mensal, use_container_width=True)
 
@@ -278,14 +313,14 @@ st.markdown("### 📋 Tabela Detalhada")
 cols_tabela = [
     "data_conversao_br", "nome", "email", "cargo_norm", "tamanho_igreja_norm",
     "nome_igreja", "decisor", "cliente_inchurch", "canal", "utm_source_grupo",
-    "utm_medium", "campanha_forms", "id_formulario", "total_conversoes_lead",
+    "utm_medium", "campanha_forms_disp", "id_formulario", "total_conversoes_lead",
 ]
 tabela = work_df[cols_tabela].rename(columns={
     "data_conversao_br": "Data", "nome": "Nome", "email": "E-mail",
     "cargo_norm": "Cargo", "tamanho_igreja_norm": "Tamanho Igreja",
     "nome_igreja": "Igreja", "decisor": "Decisor", "cliente_inchurch": "Já é Cliente",
     "canal": "Canal", "utm_source_grupo": "UTM Source (grupo)", "utm_medium": "UTM Medium",
-    "campanha_forms": "Campanha", "id_formulario": "Formulário",
+    "campanha_forms_disp": "Campanha", "id_formulario": "Formulário",
     "total_conversoes_lead": "Total Conversões (lead)",
 }).sort_values("Data", ascending=False)
 

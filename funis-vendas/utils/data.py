@@ -13,6 +13,7 @@ from google.cloud import bigquery
 
 
 PALETTE_GREEN = "#6eda2c"
+PALETTE_GREEN_LIGHT = "#c3f2a0"
 COLOR_ABERTO = "#f0a020"
 COLOR_DESQ = "#e74c3c"
 CHART_TEMPLATE = "plotly_dark"
@@ -402,6 +403,12 @@ _DATASET_MKT = "business-intelligence-467516.marketing_data"
 # mais leve). Mudar aqui muda a janela em toda a página de uma vez.
 MKT_JANELA_ANOS = 3
 
+# Labels de exibição de `campanha_forms` — valores reais da fonte são só "MEIO"
+# e "TOPO" (sem "FUNDO"). ~5% das linhas não têm campanha classificada (nulo)
+# — vira uma 3ª caixa própria no filtro, nunca escondida dentro de outra opção.
+CAMPANHA_LABELS = {"MEIO": "Meio", "TOPO": "Topo"}
+CAMPANHA_NAO_CLASSIFICADO = "Não Classificado"
+
 # Campos com valor não-nulo contam pra "completude" de um registro de lead —
 # usado no desempate de qual conversão representa o lead quando "lead único" está
 # ativo. Ver Documentacoes/[VND] Dashboard_Funis_Vendas.md, seção Página 4.
@@ -571,6 +578,7 @@ def load_marketing_conversoes() -> pd.DataFrame:
     df["data_br"] = pd.to_datetime(df["data_br"])
     df["cargo_norm"] = normalize_cargo(df["cargo"])
     df["tamanho_igreja_norm"] = normalize_tamanho_igreja(df["tamanho_igreja"])
+    df["campanha_forms_disp"] = df["campanha_forms"].map(CAMPANHA_LABELS).fillna(CAMPANHA_NAO_CLASSIFICADO)
     return df
 
 
