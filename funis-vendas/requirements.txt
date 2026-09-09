@@ -5,6 +5,7 @@ plotly>=5.20
 pandas>=2.0
 pyarrow>=12.0
 google-cloud-bigquery>=3.11
+google-cloud-bigquery-storage>=2.24
 google-auth>=2.20
 db-dtypes>=1.1.1
 python-dateutil>=2.8

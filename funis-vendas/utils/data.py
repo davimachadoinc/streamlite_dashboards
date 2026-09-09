@@ -390,3 +390,232 @@ def time_to_contact_by_weekday(df: pd.DataFrame) -> pd.DataFrame:
     out.index.name = "dia_semana"
     out = out.reindex(WEEKDAYS_PT).reset_index()
     return out
+
+
+# ─────────────────────────────────────────────
+# PÁGINA 4 — CONVERSÕES DE MARKETING (business-intelligence-467516.marketing_data)
+# ─────────────────────────────────────────────
+_DATASET_MKT = "business-intelligence-467516.marketing_data"
+
+# Trava rígida de janela de carga — fonte tem histórico desde 2021-04-20, mas a
+# página só carrega os últimos N anos (decisão do usuário 2026-09-09, pra ficar
+# mais leve). Mudar aqui muda a janela em toda a página de uma vez.
+MKT_JANELA_ANOS = 3
+
+# Campos com valor não-nulo contam pra "completude" de um registro de lead —
+# usado no desempate de qual conversão representa o lead quando "lead único" está
+# ativo. Ver Documentacoes/[VND] Dashboard_Funis_Vendas.md, seção Página 4.
+_MKT_COMPLETUDE_COLS = [
+    "nome", "telefone", "cargo", "tamanho_igreja", "nome_igreja",
+    "decisor", "cliente_inchurch",
+]
+
+
+# DE-PARA de `cargo` — cobre as variantes com volume relevante (grafia, gênero,
+# abreviação, typo). Cauda longa de respostas de texto livre (< 20 ocorrências
+# cada, incluindo múltipla-escolha concatenada com "|") cai em "Outros" — ver
+# achado completo (139 valores distintos) em
+# G:/Meu Drive/Obisidian/Davi/_claude/marketing-data-dicionario.md.
+CARGO_DEPARA = {
+    "pastor principal": "Pastor Principal",
+    "pastor_principal_": "Pastor Principal",
+    "pastor_principal": "Pastor Principal",
+    "pastora principal": "Pastor Principal",
+    "pr principal": "Pastor Principal",
+    "pastor auxiliar": "Pastor Auxiliar",
+    "pastor_auxiliar_": "Pastor Auxiliar",
+    "pastor_auxiliar": "Pastor Auxiliar",
+    "pastor aux.": "Pastor Auxiliar",
+    "pastora auxiliar": "Pastor Auxiliar",
+    "pr auxiliar": "Pastor Auxiliar",
+    "associate pastor": "Pastor Auxiliar",
+    "pastor presidente": "Pastor Presidente",
+    "pastor  presidente": "Pastor Presidente",
+    "pastora presidente": "Pastor Presidente",
+    "pastor-presidente": "Pastor Presidente",
+    "pr presidente": "Pastor Presidente",
+    "pastor presidente temporário": "Pastor Presidente",
+    "bispo presidente": "Pastor Presidente",
+    "pastora titular": "Pastor Presidente",
+    "pastor titular": "Pastor Presidente",
+    "pr. titular": "Pastor Presidente",
+    "pastor sênior": "Pastor Presidente",
+    "pastor senior": "Pastor Presidente",
+    "pr senior": "Pastor Presidente",
+    "pr gestão": "Pastor Presidente",
+    "pastor geral": "Pastor Presidente",
+    "lead pastor": "Pastor Presidente",
+    "pastor": "Pastor (Genérico)",
+    "pastora": "Pastor (Genérico)",
+    "not found": "Não Informado",
+    "não sou pastor": "Não é Pastor",
+    "líder de ministério": "Líder De Ministério",
+    "líder_de_ministério_": "Líder De Ministério",
+    "lider de ministério": "Líder De Ministério",
+    "líder de ministérios": "Líder De Ministério",
+    "ministry leader": "Líder De Ministério",
+    "líder outro ministério": "Líder De Ministério",
+    "lider comunicação": "Líder De Comunicação",
+    "líder de comunicação": "Líder De Comunicação",
+    "líder da comunicação": "Líder De Comunicação",
+    "comunicação": "Líder De Comunicação",
+    "líder de célula": "Líder De Célula",
+    "líder de células": "Líder De Célula",
+    "célula": "Líder De Célula",
+    "líder de kids": "Líder De Kids",
+    "líder do kids": "Líder De Kids",
+    "líder ministério infantil": "Líder De Kids",
+    "líder de jovens": "Líder De Jovens",
+    "líder de jovem": "Líder De Jovens",
+    "vice líder de jovens": "Líder De Jovens",
+    "líder do financeiro": "Líder Financeiro",
+    "líder financeiro": "Líder Financeiro",
+    "membro": "Membro",
+    "member": "Membro",
+    "funcionário": "Funcionário",
+    "funcionária": "Funcionário",
+    "funcinário": "Funcionário",
+    "funcionã¡rio": "Funcionário",
+}
+
+
+# DE-PARA de `tamanho_igreja` — normaliza só variantes de FORMATO/pontuação do
+# mesmo intervalo numérico (traço vs. en-dash, separador de milhar, "Até 50" ==
+# "1-50"). Intervalos genuinamente diferentes (ex.: "101-250" vs "101-300" vs
+# "101-200", de versões distintas do formulário ao longo do tempo) são mantidos
+# como categorias distintas — forçar num único intervalo distorceria o dado.
+# Valor não mapeado aqui (não deveria ocorrer, mas por segurança) passa direto
+# sem alteração, nunca é descartado.
+TAMANHO_DEPARA = {
+    "1-50": "1-50", "1 – 50": "1-50", "até 50": "1-50",
+    "51-100": "51-100", "51 – 100": "51-100", "51 - 100": "51-100",
+    "1-100": "1-100", "0-100": "1-100",
+    "101-250": "101-250", "101 – 250": "101-250",
+    "101-300": "101-300", "100-300": "101-300",
+    "101-200": "101-200", "101 - 200": "101-200",
+    "251-500": "251-500", "251 – 500": "251-500",
+    "301-500": "301-500",
+    "201 - 400": "201-400",
+    "401 - 600": "401-600",
+    "501-1000": "501-1000", "501 – 1.000": "501-1000", "501-1.000": "501-1000",
+    "500 até 1000 membros": "501-1000",
+    "601 - 1000": "601-1000",
+    "500+": "500+",
+    "1001-2500": "1001-2500", "1.001 – 2.500": "1001-2500",
+    "1001-2000": "1001-2000", "1001 - 2000": "1001-2000",
+    "1000 até 2000 membros": "1001-2000",
+    "+1.000": "1000+",
+    "2501-5000": "2501-5000", "2.501 – 5.000": "2501-5000",
+    "2001-5000": "2001-5000", "2001 - 5000": "2001-5000",
+    "1001-3000": "1001-3000",
+    "5000+": "5000+", "5.000+": "5000+", "5000": "5000+", "+ 5000": "5000+",
+    "+ 3000": "3000+",
+}
+
+
+def normalize_cargo(s: pd.Series) -> pd.Series:
+    """Aplica CARGO_DEPARA; vazio/nulo -> 'Não Informado'; não mapeado -> 'Outros'."""
+    raw = s.fillna("").astype(str).str.strip()
+    key = raw.str.lower()
+    out = key.map(CARGO_DEPARA)
+    out = out.fillna("Outros")
+    out[raw == ""] = "Não Informado"
+    return out
+
+
+def normalize_tamanho_igreja(s: pd.Series) -> pd.Series:
+    """Aplica TAMANHO_DEPARA (lookup case-insensitive); vazio/nulo -> 'Não Informado';
+    não mapeado -> mantém valor bruto (nunca descarta, ver comentário no dict)."""
+    raw = s.fillna("").astype(str).str.strip()
+    key = raw.str.lower()
+    out = key.map(TAMANHO_DEPARA)
+    out = out.fillna(raw)
+    out[raw == ""] = "Não Informado"
+    return out
+
+
+@st.cache_data(ttl=3600)
+def load_marketing_conversoes() -> pd.DataFrame:
+    """
+    Carga bruta de VW_CONVERSOES (leads/conversões de formulário de marketing).
+    Schema completo e achados de qualidade de dado documentados em
+    G:/Meu Drive/Obisidian/Davi/_claude/marketing-data-dicionario.md.
+    Cache de 1h — mesmo padrão das outras cargas deste dashboard.
+
+    ⚠️ Trava RÍGIDA de janela — só carrega os últimos MKT_JANELA_ANOS anos
+    (decisão do usuário 2026-09-09, pra manter a página leve: fonte tem
+    histórico completo desde 2021-04-20, mas essa página nunca vê além da
+    janela). Efeitos colaterais assumidos: o desempate de "lead único" por
+    primeira conversão (ver mkt_lead_unico) considera só a primeira DENTRO da
+    janela, não a da vida toda do lead se ele for mais antigo que isso; mesma
+    ressalva pra `ordem_conversao_lead`/`total_conversoes_lead`, que continuam
+    corretos em relação ao histórico REAL do lead (calculados pela view sobre
+    a base completa), mas a primeira linha desse histórico pode não estar
+    presente aqui se cair fora da janela.
+    """
+    query = f"""
+        SELECT
+          conversao_id, data_conversao, data_conversao_br, data_br, mes_br,
+          nome, email, telefone, cargo, tamanho_igreja, nome_igreja,
+          decisor, cliente_inchurch, id_formulario, campanha_forms, canal,
+          utm_source, utm_source_grupo, utm_source_detalhe, utm_medium,
+          utm_campaign, utm_content,
+          ordem_conversao_lead, total_conversoes_lead
+        FROM `{_DATASET_MKT}.VW_CONVERSOES`
+        WHERE data_br >= DATE_SUB(CURRENT_DATE('America/Sao_Paulo'), INTERVAL {MKT_JANELA_ANOS} YEAR)
+    """
+    df = _bq_query(query)
+    if df.empty:
+        return df
+    df["data_conversao_br"] = pd.to_datetime(df["data_conversao_br"])
+    df["data_br"] = pd.to_datetime(df["data_br"])
+    df["cargo_norm"] = normalize_cargo(df["cargo"])
+    df["tamanho_igreja_norm"] = normalize_tamanho_igreja(df["tamanho_igreja"])
+    return df
+
+
+def mkt_options(df: pd.DataFrame, col: str) -> list[str]:
+    """Valores distintos não-nulos de `col`, ordenados, pra popular multiselect."""
+    return sorted(df[col].dropna().unique().tolist())
+
+
+def mkt_lead_unico(
+    dfv: pd.DataFrame, df_full: pd.DataFrame, active_filters: dict[str, list]
+) -> tuple[pd.DataFrame, int]:
+    """
+    Dedup por e-mail — semântica decidida em `/grill-me` 2026-09-09
+    (Documentacoes/[VND] Dashboard_Funis_Vendas.md, Página 4):
+
+    1. `dfv` já veio filtrada no nível de conversão (período + filtros ativos) —
+       um lead aparece se QUALQUER conversão dele bateu no filtro (semântica
+       EXISTS, obtida de graça ao filtrar em nível de linha antes de agrupar).
+    2. Pra cada e-mail em `dfv`, o registro exibido é o de maior completude
+       (mais campos não-nulos entre _MKT_COMPLETUDE_COLS) dentre as conversões
+       QUE BATERAM no filtro — não do histórico inteiro do lead. Empate:
+       conversão mais ANTIGA (data_conversao) entre as empatadas.
+    3. Nota de overlap: conta quantos desses leads têm, no histórico COMPLETO
+       (`df_full`, sem filtro de período), pelo menos uma conversão com algum
+       valor DIFERENTE do selecionado em algum filtro categórico ativo — ou
+       seja, não são exclusivos daquele valor de filtro. Período não entra
+       nessa checagem (só os filtros categóricos em `active_filters`).
+
+    Retorna (dedup_df, n_leads_com_overlap).
+    """
+    if dfv.empty:
+        return dfv, 0
+
+    d = dfv.copy()
+    d["_completude"] = d[_MKT_COMPLETUDE_COLS].notna().sum(axis=1)
+    d = d.sort_values(["_completude", "data_conversao"], ascending=[False, True])
+    dedup = d.drop_duplicates(subset="email", keep="first").drop(columns="_completude")
+
+    n_overlap = 0
+    if active_filters:
+        leads = dedup["email"].unique()
+        historico = df_full[df_full["email"].isin(leads)]
+        mask_fora = pd.Series(False, index=historico.index)
+        for col, valores in active_filters.items():
+            mask_fora = mask_fora | (~historico[col].isin(valores))
+        n_overlap = historico.loc[mask_fora, "email"].nunique()
+
+    return dedup, n_overlap
