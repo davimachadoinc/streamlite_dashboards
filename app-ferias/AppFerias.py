@@ -75,12 +75,6 @@ def chats_people(message, email):
     requests.post(url, headers=headers, json=data)
 
 
-def chats_channel(message):
-    url = 'https://chat.googleapis.com/v1/spaces/AAQALAab39o/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=yW5wgfP7tBz5e4n6yxfjkPwB9KGoCueM5dEO6rmElng'  # noqa
-    headers = {'Content-Type': 'application/json'}
-    data = {"text": message}
-    requests.post(url, headers=headers, json=data)
-
 
 def ler_dados(nome_aba, intervalo):
     try:
