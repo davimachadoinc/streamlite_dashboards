@@ -306,7 +306,7 @@ fig.add_bar(
 )
 fig.add_bar(
     x=x_order_total, y=vol_resto_mes,
-    name=f"Volume a partir do dia {cutoff_day + 1}", marker_color=PALETTE[6], opacity=0.9, yaxis="y",
+    name=f"Volume a partir do dia {cutoff_day + 1}", marker_color="#c9f2a0", opacity=0.9, yaxis="y",
     hovertemplate="<b>%{x}</b><br>A partir do dia " + str(cutoff_day + 1) + ": R$ %{y:,.2f}<extra></extra>",
 )
 fig.add_scatter(
