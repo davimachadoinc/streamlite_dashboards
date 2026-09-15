@@ -19,7 +19,7 @@ from utils.style import inject_css
 from utils.data import (
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
-    load_transactions_por_metodo, load_transactions_clientes_por_mes,
+    load_transactions_por_metodo, load_transactions_diario, load_transactions_clientes_por_mes,
     load_intermediacao_mensal, load_sara_ids,
     load_take_rate_snapshot_v2 as load_take_rate_snapshot,
     load_take_rate_historico_v2 as load_take_rate_historico,
@@ -61,6 +61,7 @@ with col_filter:
 # ── Carga ─────────────────────────────────────
 with st.spinner("Carregando dados de transações..."):
     df_raw        = load_transactions_por_metodo(exclude_ids=_excl, only_ids=_only)
+    df_diario_raw = load_transactions_diario(exclude_ids=_excl, only_ids=_only)
     df_cli_raw    = load_transactions_clientes_por_mes(exclude_ids=_excl, only_ids=_only)
     df_interm_raw = load_intermediacao_mensal()
     snap_tr       = load_take_rate_snapshot(exclude_ids=_excl, only_ids=_only)
@@ -116,6 +117,14 @@ df_cli = df_cli_raw[
 df_cli = filter_months(df_cli, n_months, "mes")
 
 df_interm = filter_months(df_interm_raw, n_months, "mes")
+
+df_diario = df_diario_raw[
+    df_diario_raw["payment_channel"].isin(selected_channels) &
+    df_diario_raw["tipo"].isin(selected_tipos)
+].copy()
+if not df_diario.empty:
+    df_diario["mes"] = df_diario["dia"].dt.to_period("M").dt.to_timestamp()
+df_diario = filter_months(df_diario, n_months, "mes")
 
 if df.empty:
     no_data("Nenhuma transação com os filtros selecionados.")
@@ -266,10 +275,39 @@ st.divider()
 # SEÇÃO 3 — Volume Total + Qtd (dual axis)
 # ─────────────────────────────────────────────
 st.subheader("Volume Total (R$) e Quantidade de Transações")
+
+# Dia de corte = "ontem" (dia atual - 1). Aplicado ao dia-do-mês de TODOS os
+# meses do gráfico: até esse dia = verde (já consolidado), do dia seguinte até
+# o fim do mês = verde claro (parte do mês ainda "à frente" do corte de ontem).
+cutoff_day = (pd.Timestamp.today().normalize() - pd.Timedelta(days=1)).day
+
+if df_diario.empty:
+    vol_ate_ontem = pd.Series(0.0, index=x_order_total)
+    vol_resto_mes = pd.Series(0.0, index=x_order_total)
+else:
+    df_diario["mes_fmt"] = df_diario["mes"].dt.strftime("%b/%y").str.capitalize()
+    df_diario["segmento"] = "resto_mes"
+    df_diario.loc[df_diario["dia"].dt.day <= cutoff_day, "segmento"] = "ate_ontem"
+
+    pivot_split = (
+        df_diario.groupby(["mes_fmt", "segmento"])["total_value"]
+        .sum()
+        .unstack(fill_value=0)
+        .reindex(x_order_total, fill_value=0)
+    )
+    vol_ate_ontem = pivot_split["ate_ontem"] if "ate_ontem" in pivot_split else pd.Series(0.0, index=x_order_total)
+    vol_resto_mes = pivot_split["resto_mes"] if "resto_mes" in pivot_split else pd.Series(0.0, index=x_order_total)
+
 fig = go.Figure()
 fig.add_bar(
-    x=df_total["mes_fmt"], y=df_total["total_value"],
-    name="Volume (R$)", marker_color=PALETTE[0], opacity=0.85, yaxis="y",
+    x=x_order_total, y=vol_ate_ontem,
+    name=f"Volume até dia {cutoff_day}", marker_color=PALETTE[0], opacity=0.9, yaxis="y",
+    hovertemplate="<b>%{x}</b><br>Até dia " + str(cutoff_day) + ": R$ %{y:,.2f}<extra></extra>",
+)
+fig.add_bar(
+    x=x_order_total, y=vol_resto_mes,
+    name=f"Volume a partir do dia {cutoff_day + 1}", marker_color=PALETTE[6], opacity=0.9, yaxis="y",
+    hovertemplate="<b>%{x}</b><br>A partir do dia " + str(cutoff_day + 1) + ": R$ %{y:,.2f}<extra></extra>",
 )
 fig.add_scatter(
     x=df_total["mes_fmt"], y=df_total["qtd"],
@@ -277,6 +315,7 @@ fig.add_scatter(
     line=dict(color=PALETTE[1], width=2.5), marker=dict(size=7), yaxis="y2",
 )
 fig.update_layout(
+    barmode="stack",
     yaxis2=dict(overlaying="y", side="right", showgrid=False, color=PALETTE[1]),
     xaxis=dict(categoryorder="array", categoryarray=x_order_total, type="category"),
 )

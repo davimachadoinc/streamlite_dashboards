@@ -576,6 +576,48 @@ def load_transactions_por_metodo(exclude_ids: tuple = (), only_ids: tuple = ()) 
 
 
 @st.cache_data(ttl=72000)
+def load_transactions_diario(exclude_ids: tuple = (), only_ids: tuple = ()) -> pd.DataFrame:
+    """
+    Mesma base de load_transactions_por_metodo, mas agregada por DIA em vez de mês.
+    Usada para separar, dentro de cada mês, o volume até "ontem" (dia corrente - 1)
+    do volume do restante do mês, no gráfico "Volume Total (R$) e Qtd. de Transações".
+    """
+    sara_filter = ""
+    if exclude_ids:
+        ids_str = ", ".join(str(i) for i in exclude_ids)
+        sara_filter = f"\n      AND t.tertiarygroup_id NOT IN ({ids_str})"
+    elif only_ids:
+        ids_str = ", ".join(str(i) for i in only_ids)
+        sara_filter = f"\n      AND t.tertiarygroup_id IN ({ids_str})"
+
+    query = f"""
+    SELECT
+      CAST(t.datetime AS DATE)                                           AS dia,
+      t.payment_channel,
+      CASE WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
+           ELSE 'outros' END                                             AS tipo,
+      SUM(t.value)                                                       AS total_value,
+      COUNT(*)                                                           AS qtd_transacoes
+    FROM `inchurch-gcp.backend_bi.view_transaction` t
+    LEFT JOIN `inchurch-gcp.backend_bi.view_donation` d
+           ON d.transaction_ptr_id = t.id
+    WHERE
+      t.status IN ('active', 'payed')
+      AND t.method NOT IN ('free', 'external', 'debit')
+      AND CAST(t.datetime AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+      AND CAST(t.datetime AS DATE) <= LAST_DAY(CURRENT_DATE()){sara_filter}
+    GROUP BY 1, 2, 3
+    ORDER BY 1
+    """
+    df = _bq_query(query, "bigquery_tech")
+    if not df.empty:
+        df["dia"]             = pd.to_datetime(df["dia"])
+        df["payment_channel"] = df["payment_channel"].fillna("Não informado")
+        df["tipo"]            = df["tipo"].fillna("outros")
+    return df
+
+
+@st.cache_data(ttl=72000)
 def load_take_rate_snapshot_v2(exclude_ids: tuple = (), only_ids: tuple = ()) -> dict:
     """
     Snapshot do take rate do mês corrente.
