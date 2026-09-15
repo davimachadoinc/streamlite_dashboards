@@ -89,6 +89,7 @@ for col in ["mrr_inicio", "novas_vendas_mrr", "upsell_mrr", "desativacoes_mrr"]:
     df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
 df = df.sort_values("mes")
+df = df[df["mes"] >= pd.Timestamp("2026-01-01")]
 df["variacao_liquida"] = df["novas_vendas_mrr"] + df["upsell_mrr"] - df["desativacoes_mrr"]
 df["mrr_fim"] = df["mrr_inicio"] + df["variacao_liquida"]
 df["nrr"] = (
