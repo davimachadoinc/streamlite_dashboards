@@ -2167,3 +2167,147 @@ def compute_rmst_snapshots(
             )
         linhas.append(linha)
     return pd.DataFrame(linhas)
+
+
+# ─────────────────────────────────────────────
+# PÁGINA — VARIAÇÃO DE MRR (Novas Vendas / Upsell / Desativações / NRR)
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=72000)
+def load_mrr_inicio_mensal(n_meses: int = 15) -> pd.DataFrame:
+    """
+    MRR ativo no início de cada mês (Superlógica, vw-splgc-tabela_mrr_validos) —
+    mesma lógica de load_mrr_waterfall() do Unit Economics, portada aqui como
+    denominador do NRR da página de MRR do Financeiro (mantém a mesma convenção
+    entre as duas páginas).
+
+    Trata renovações (contrato encerrado no último dia do mês X + mesmo
+    cliente/família de produto reiniciando no mês X+1) como continuidade, não
+    como churn+novo — sem isso, migrações de faixa/catálogo abrem um buraco
+    artificial no MRR de início de mês. Ver [[churn-desativacoes]].
+    """
+    query = f"""
+    WITH
+    meses AS (
+      SELECT mes FROM UNNEST(GENERATE_DATE_ARRAY(
+        DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL {n_meses} MONTH),
+        DATE_TRUNC(CURRENT_DATE(), MONTH),
+        INTERVAL 1 MONTH
+      )) AS mes
+    ),
+    mrr_ultima_geracao AS (
+      SELECT st_sincro_sac, MAX(CAST(dt_fim_mens AS DATE)) AS ultima_dt_fim_cliente
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NOT NULL
+        AND st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+      GROUP BY 1
+    ),
+    ren_old_agg AS (
+      SELECT
+        st_sincro_sac, st_descricao_prd,
+        DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH) AS mes_old,
+        SUM(valor_total)                              AS old_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE dt_fim_mens IS NOT NULL
+        AND CAST(dt_fim_mens AS DATE) = LAST_DAY(CAST(dt_fim_mens AS DATE))
+        AND st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND DATE_TRUNC(CAST(dt_fim_mens AS DATE), MONTH)
+              >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL {n_meses + 1} MONTH)
+      GROUP BY 1, 2, 3
+    ),
+    ren_new_agg AS (
+      SELECT
+        st_sincro_sac, st_descricao_prd,
+        DATE_TRUNC(CAST(dt_inicio_mens AS DATE), MONTH) AS mes_new,
+        SUM(valor_total)                                 AS new_total
+      FROM `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos`
+      WHERE st_descricao_prd NOT LIKE '%Setup%'
+        AND st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+        AND DATE_TRUNC(CAST(dt_inicio_mens AS DATE), MONTH)
+              >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL {n_meses} MONTH)
+      GROUP BY 1, 2, 3
+    ),
+    ren_pairs AS (
+      SELECT
+        o.st_sincro_sac, o.st_descricao_prd AS old_desc, o.mes_old
+      FROM ren_old_agg o
+      INNER JOIN ren_new_agg n
+        ON  o.st_sincro_sac = n.st_sincro_sac
+        AND {_FAMILIA_PRODUTO.format(col="o.st_descricao_prd")} = {_FAMILIA_PRODUTO.format(col="n.st_descricao_prd")}
+        AND n.mes_new = DATE_ADD(o.mes_old, INTERVAL 1 MONTH)
+      QUALIFY COUNT(DISTINCT o.st_descricao_prd) OVER (PARTITION BY o.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="o.st_descricao_prd")}, o.mes_old) = 1
+           AND COUNT(DISTINCT n.st_descricao_prd) OVER (PARTITION BY o.st_sincro_sac, {_FAMILIA_PRODUTO.format(col="o.st_descricao_prd")}, o.mes_old) = 1
+    ),
+    ren_markers AS (
+      SELECT DISTINCT st_sincro_sac, old_desc AS st_descricao_prd, mes_old
+      FROM ren_pairs
+    ),
+    mrr_inicio_mes AS (
+      SELECT
+        cal.mes,
+        SUM(mrr.valor_total)              AS mrr_inicio,
+        COUNT(DISTINCT mrr.st_sincro_sac) AS clientes_inicio
+      FROM meses cal
+      CROSS JOIN `business-intelligence-467516.Splgc.vw-splgc-tabela_mrr_validos` mrr
+      LEFT JOIN mrr_ultima_geracao ug ON mrr.st_sincro_sac = ug.st_sincro_sac
+      LEFT JOIN ren_markers rm
+        ON  mrr.st_sincro_sac    = rm.st_sincro_sac
+        AND mrr.st_descricao_prd = rm.st_descricao_prd
+        AND DATE_TRUNC(CAST(mrr.dt_fim_mens AS DATE), MONTH) = rm.mes_old
+      WHERE CAST(mrr.dt_inicio_mens AS DATE) < cal.mes
+        AND (
+          mrr.dt_fim_mens IS NULL
+          OR {_DT_FIM_EFETIVO.format(fim_col="CAST(mrr.dt_fim_mens AS DATE)", ultima_col="ug.ultima_dt_fim_cliente", desativ_col="CAST(mrr.dt_desativacao_sac AS DATE)")} >= cal.mes
+          OR (rm.st_sincro_sac IS NOT NULL
+              AND CAST(mrr.dt_fim_mens AS DATE) = DATE_SUB(cal.mes, INTERVAL 1 DAY))
+        )
+        AND mrr.st_descricao_prd NOT LIKE '%Setup%'
+        AND mrr.st_descricao_prd NOT LIKE '%[PRO-RATA]%'
+      GROUP BY 1
+    )
+    SELECT mes, mrr_inicio, clientes_inicio
+    FROM mrr_inicio_mes
+    ORDER BY 1
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+    return df
+
+
+@st.cache_data(ttl=72000)
+def load_fechamentos_mrr_mensal(n_meses: int = 15) -> pd.DataFrame:
+    """
+    MRR de Novas Vendas e Upsell por mês, direto de Fechamentos_com_ajustes
+    (base de vendas atribuídas — HubSpot/formulários — não a Superlógica).
+    Mês definido por first_payment (data do 1º boleto pago do fechamento),
+    que pode ter defasagem em relação ao início real da mensalidade na
+    Superlógica (ver [[fechamentos-vendas]]).
+
+    Novas Vendas = new_deal = TRUE (fonte final 'Form de Fechamentos', só
+    vendas vindas do formulário de vendas).
+    Upsell = upsell = TRUE (fontes finais 'Upsell Painel' e 'Form de
+    Upsell' — cobre os dois canais: painel de controle e formulário de
+    upsell, já que upsell=TRUE é a união dos dois). Ver [[upsell-logica]].
+
+    `excluir = TRUE` já é filtrado antes de chegar em Fechamentos_com_ajustes
+    (tabela final) — não precisa refiltrar aqui.
+    """
+    query = f"""
+    SELECT
+      DATE_TRUNC(first_payment, MONTH)                AS mes,
+      CASE WHEN upsell THEN 'upsell' ELSE 'novo' END   AS tipo,
+      SUM(value)                                       AS mrr,
+      COUNT(DISTINCT tertiarygroup_id)                 AS clientes
+    FROM `business-intelligence-467516.Fechamento_vendas.Fechamentos_com_ajustes`
+    WHERE DATE_TRUNC(first_payment, MONTH)
+            >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL {n_meses} MONTH)
+      AND value IS NOT NULL
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+    """
+    df = _bq_query(query, "bigquery_bi")
+    if not df.empty:
+        df["mes"] = pd.to_datetime(df["mes"])
+    return df
