@@ -1460,8 +1460,8 @@ def load_inadimplencia_por_frequencia() -> pd.DataFrame:
         ON b.id_sacado_sac = c.id_sacado_sac
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
         AND b.dt_liquidacao_recb IS NULL
-        AND CAST(b.dt_vencimento_recb AS DATE)
-              BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
+        AND CAST(b.dt_vencimento_recb AS DATE) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+        AND CAST(b.dt_vencimento_recb AS DATE) < CURRENT_DATE()
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
         AND EXISTS (
@@ -1515,8 +1515,8 @@ def load_inadimplencia_top_clientes(dias: int = 30, grupo: str | None = None) ->
       {_grupo_join}
       WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
         AND b.dt_liquidacao_recb IS NULL
-        AND CAST(b.dt_vencimento_recb AS DATE)
-              BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL {dias} DAY) AND CURRENT_DATE()
+        AND CAST(b.dt_vencimento_recb AS DATE) >= DATE_SUB(CURRENT_DATE(), INTERVAL {dias} DAY)
+        AND CAST(b.dt_vencimento_recb AS DATE) < CURRENT_DATE()
         AND (c.dt_desativacao_sac IS NULL
              OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
         AND EXISTS (
