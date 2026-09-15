@@ -1424,8 +1424,8 @@ def load_inadimplencia_por_plano(grupo: str | None = None) -> pd.DataFrame:
     {_grupo_join}
     WHERE b.comp_st_conta_cont IN ('1.2.1', '1.2.2')
       AND b.dt_liquidacao_recb IS NULL
-      AND CAST(b.dt_vencimento_recb AS DATE)
-            BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) AND CURRENT_DATE()
+      AND CAST(b.dt_vencimento_recb AS DATE) >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+      AND CAST(b.dt_vencimento_recb AS DATE) < CURRENT_DATE()
       AND (c.dt_desativacao_sac IS NULL
            OR c.dt_desativacao_sac > CAST(b.dt_vencimento_recb AS DATE))
       AND EXISTS (
