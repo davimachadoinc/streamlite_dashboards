@@ -33,6 +33,8 @@ METHOD_PALETTE = {
     "billet": "#a0a0a0",
 }
 
+TIPO_COLORS = {"doacao": "#6eda2c", "evento": "#ffffff", "outros": "#a0a0a0"}
+
 def method_color(m: str) -> str:
     colors = ["#6eda2c","#ffffff","#57d124","#a0a0a0","#8ae650","#3ba811","#cccccc"]
     keys = list(METHOD_PALETTE.keys())
@@ -80,7 +82,7 @@ with st.sidebar:
     )
     st.markdown("### 🏷️ Tipo de Transação")
     tipos = sorted(df_raw["tipo"].dropna().unique().tolist())
-    TIPO_LABELS = {"doacao": "Doação", "outros": "Outros"}
+    TIPO_LABELS = {"doacao": "Doação", "evento": "Evento", "outros": "Outros"}
     selected_tipos = st.multiselect(
         "Filtrar por tipo",
         options=tipos,
@@ -272,6 +274,59 @@ with col_d:
 st.divider()
 
 # ─────────────────────────────────────────────
+# SEÇÃO 2B — Volume por Tipo: Doação vs Evento
+# ─────────────────────────────────────────────
+st.subheader("Volume Financeiro por Tipo de Transação")
+col_tipo_a, col_tipo_b = st.columns(2)
+
+df_tipo_agg = (
+    df.groupby(["mes", "tipo"], as_index=False)
+    .agg(total_value=("total_value", "sum"), qtd=("qtd_transacoes", "sum"))
+)
+df_tipo_agg, x_order_tipo = mes_fmt_ordered(df_tipo_agg)
+tipos_presentes = sorted(df_tipo_agg["tipo"].unique().tolist())
+
+# Gráfico 2C — Volume (R$) por tipo, empilhado por mês
+with col_tipo_a:
+    st.subheader("Volume (R$) — Doação vs Evento")
+    fig = go.Figure()
+    for t in tipos_presentes:
+        sub = df_tipo_agg[df_tipo_agg["tipo"] == t].sort_values("mes")
+        fig.add_bar(
+            x=sub["mes_fmt"], y=sub["total_value"],
+            name=TIPO_LABELS.get(t, t), marker_color=TIPO_COLORS.get(t, PALETTE[3]),
+            hovertemplate="<b>%{x}</b><br>" + TIPO_LABELS.get(t, t) + ": R$ %{y:,.2f}<extra></extra>",
+        )
+    fig.update_layout(
+        barmode="stack",
+        xaxis=dict(categoryorder="array", categoryarray=x_order_tipo, type="category"),
+    )
+    st.plotly_chart(chart_layout(fig, legend_bottom=True), use_container_width=True)
+
+# Gráfico 2D — Participação % último mês (pizza)
+with col_tipo_b:
+    st.subheader("Participação por Tipo — Último Mês")
+    last_month_tipo = df_tipo_agg["mes"].max()
+    df_last_tipo = df_tipo_agg[df_tipo_agg["mes"] == last_month_tipo]
+    if df_last_tipo.empty:
+        no_data()
+    else:
+        fig = go.Figure(go.Pie(
+            labels=df_last_tipo["tipo"].map(lambda t: TIPO_LABELS.get(t, t)),
+            values=df_last_tipo["total_value"],
+            hole=0.45,
+            marker_colors=[TIPO_COLORS.get(t, PALETTE[3]) for t in df_last_tipo["tipo"]],
+            textfont=dict(size=12, family="Outfit"),
+        ))
+        fig.update_traces(
+            texttemplate="%{label}<br>%{percent}",
+            hovertemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>",
+        )
+        st.plotly_chart(chart_layout(fig, height=360), use_container_width=True)
+
+st.divider()
+
+# ─────────────────────────────────────────────
 # SEÇÃO 3 — Volume Total + Qtd (dual axis)
 # ─────────────────────────────────────────────
 st.subheader("Volume Total (R$) e Quantidade de Transações")
@@ -355,7 +410,6 @@ else:
             df_cli.groupby(["mes", "tipo"], as_index=False)
             .agg(clientes=("tertiarygroup_id", "nunique"))
         )
-        TIPO_COLORS = {"doacao": PALETTE[0], "outros": PALETTE[3]}
         if df_cli_tipo.empty:
             no_data()
         else:

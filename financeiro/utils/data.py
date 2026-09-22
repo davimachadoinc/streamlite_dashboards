@@ -531,10 +531,11 @@ def load_sara_ids() -> tuple:
 @st.cache_data(ttl=72000)
 def load_transactions_por_metodo(exclude_ids: tuple = (), only_ids: tuple = ()) -> pd.DataFrame:
     """
-    Soma de value por método de pagamento, canal, tipo (doacao/outros) e mês (últimos 15 meses).
+    Soma de value por método de pagamento, canal, tipo (evento/doacao/outros) e mês (últimos 15 meses).
     Status: active ou payed.
     Métodos excluídos: free (valor zero), external (valor zero), debit (volume residual).
-    tipo = 'doacao' quando id da transação está em view_donation.transaction_ptr_id.
+    tipo = 'evento' quando id da transação está em view_event_transaction.transaction_ptr_id,
+    'doacao' quando está em view_donation.transaction_ptr_id (evento tem prioridade).
     exclude_ids: exclui esses tertiarygroup_ids da agregação.
     only_ids: restringe a esses tertiarygroup_ids.
     """
@@ -551,13 +552,16 @@ def load_transactions_por_metodo(exclude_ids: tuple = (), only_ids: tuple = ()) 
       DATE_TRUNC(CAST(t.datetime AS DATE), MONTH)                       AS mes,
       t.method                                                           AS payment_method,
       t.payment_channel,
-      CASE WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
+      CASE WHEN ev.event_id IS NOT NULL THEN 'evento'
+           WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
            ELSE 'outros' END                                             AS tipo,
       SUM(t.value)                                                       AS total_value,
       COUNT(*)                                                           AS qtd_transacoes
     FROM `inchurch-gcp.backend_bi.view_transaction` t
     LEFT JOIN `inchurch-gcp.backend_bi.view_donation` d
            ON d.transaction_ptr_id = t.id
+    LEFT JOIN `inchurch-gcp.backend_bi.view_event_transaction` ev
+           ON ev.transaction_ptr_id = t.id
     WHERE
       t.status IN ('active', 'payed')
       AND t.method NOT IN ('free', 'external', 'debit')
@@ -594,13 +598,16 @@ def load_transactions_diario(exclude_ids: tuple = (), only_ids: tuple = ()) -> p
     SELECT
       CAST(t.datetime AS DATE)                                           AS dia,
       t.payment_channel,
-      CASE WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
+      CASE WHEN ev.event_id IS NOT NULL THEN 'evento'
+           WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
            ELSE 'outros' END                                             AS tipo,
       SUM(t.value)                                                       AS total_value,
       COUNT(*)                                                           AS qtd_transacoes
     FROM `inchurch-gcp.backend_bi.view_transaction` t
     LEFT JOIN `inchurch-gcp.backend_bi.view_donation` d
            ON d.transaction_ptr_id = t.id
+    LEFT JOIN `inchurch-gcp.backend_bi.view_event_transaction` ev
+           ON ev.transaction_ptr_id = t.id
     WHERE
       t.status IN ('active', 'payed')
       AND t.method NOT IN ('free', 'external', 'debit')
@@ -802,12 +809,15 @@ def load_transactions_clientes_por_mes(exclude_ids: tuple = (), only_ids: tuple 
     SELECT
       DATE_TRUNC(CAST(t.datetime AS DATE), MONTH)                       AS mes,
       t.payment_channel,
-      CASE WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
+      CASE WHEN ev.event_id IS NOT NULL THEN 'evento'
+           WHEN d.transaction_ptr_id IS NOT NULL THEN 'doacao'
            ELSE 'outros' END                                             AS tipo,
       t.tertiarygroup_id
     FROM `inchurch-gcp.backend_bi.view_transaction` t
     LEFT JOIN `inchurch-gcp.backend_bi.view_donation` d
            ON d.transaction_ptr_id = t.id
+    LEFT JOIN `inchurch-gcp.backend_bi.view_event_transaction` ev
+           ON ev.transaction_ptr_id = t.id
     WHERE
       t.status IN ('active', 'payed')
       AND t.method NOT IN ('free', 'external', 'debit')
