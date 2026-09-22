@@ -253,9 +253,24 @@ with st.expander("💡 O que é isso e em que difere do RMST acima?", expanded=T
         quem já aguentou 2 anos já provou que fica (risco mais baixo) — viés de
         sobrevivência natural de qualquer base de assinatura.
 
-        **"Vida toda"**: não é uma perda observada no fim da vida do cliente, é o hazard no
-        **último ponto em que ainda sobra amostra suficiente** pra confiar no número
-        (mesmo critério de "melhor estimativa disponível" usado no RMST completo acima).
+        **Três números de hazard aparecem nesta seção — não são a mesma coisa:**
+        - **Hazard Médio (ciclo completo)**: mistura todos os meses, do 0 ao último
+          confiável. É o que mais se aproxima da intuição "churn ≈ 1/RMST" — mas não é
+          igual a ela (ver caixa abaixo).
+        - **Snapshots por tenure (@6m/@12m/@24m)**: hazard só naquele ponto específico do
+          tempo de casa.
+        - **"Vida toda"**: hazard só de quem já sobreviveu até o último mês com amostra
+          confiável — um **horizonte máximo**, não uma média, e o grupo mais pré-selecionado
+          possível (só quem já provou que fica). É por isso que normalmente é o **mais baixo**
+          dos três, não o mais representativo do plano inteiro.
+
+        **Sobre comparar com "1/RMST":** RMST é restrito a um horizonte (o maior tempo já
+        observado naquele plano). Quando esse horizonte é bem maior que o RMST (ex: Starter,
+        RMST=12m com 68m de histórico — quase todo mundo que ia sair já saiu dentro da
+        janela), `1/RMST` e o Hazard Médio acima convergem. Quando o RMST está perto do teto
+        de dados disponíveis (ex: PRO, RMST=42m com só 68m de histórico), `1/RMST`
+        **superestima** o churn — ele trata clientes ainda ativos e censurados como se já
+        tivessem um desfecho certo. O Hazard Médio (ciclo completo) não tem esse viés.
 
         **Por que não bate com o "% de churn" da página de Desativações/MRR:** aqui a conta
         é por *cliente* e por *tempo de casa* (lógica atuarial); lá a conta é por *R$ de MRR
@@ -272,6 +287,27 @@ if not hazard_por_plano:
 else:
     df_hazard_snap = compute_hazard_snapshots(hazard_por_plano)
 
+    st.markdown("**Hazard Médio — Ciclo de Vida Completo (referência)**")
+    st.caption(
+        "Média ponderada do hazard do mês 0 até o último mês confiável — mistura TODOS os "
+        "meses, inclusive os primeiros (que concentram a maior parte das perdas). É este "
+        "número, não o \"vida toda\" mais abaixo, que se aproxima da intuição de \"taxa de "
+        "churn ≈ 1/RMST\": quando o horizonte observado é bem maior que o RMST, os dois "
+        "convergem (ex: Starter); quando o RMST está perto do teto de dados disponíveis "
+        "(ex: PRO, RMST=42m com só 68m de histórico), 1/RMST superestima o churn — trata "
+        "clientes ainda ativos e censurados como se já tivessem um desfecho."
+    )
+    df_hz_sorted = df_hazard_snap.sort_values("max_mes_confiavel", ascending=False)
+    cols_global = st.columns(len(df_hz_sorted))
+    for col, (_, row) in zip(cols_global, df_hz_sorted.iterrows()):
+        label = PLAN_LABELS.get(row["plano"], row["plano"].title())
+        with col:
+            st.metric(
+                label,
+                f"{row['hazard_global_pct']:.1f}%/mês" if pd.notna(row["hazard_global_pct"]) else "—",
+                help=f"n={int(row['hazard_global_n'])} clientes-mês no cálculo" if pd.notna(row["hazard_global_pct"]) else None,
+            )
+
     st.markdown("**Snapshots — chance de sair no mês seguinte, por tempo de casa já cumprido**")
     st.caption(
         "Cada snapshot agrega uma janela de ±2 meses ao redor do ponto (soma de perdas "
@@ -282,19 +318,33 @@ else:
 
     df_show_hz = df_hazard_snap.sort_values("max_mes_confiavel", ascending=False).copy()
     df_show_hz["Plano"] = df_show_hz["plano"].map(PLAN_LABELS).fillna(df_show_hz["plano"])
+
+    def _fmt_hazard(pct, n):
+        return f"{pct:.1f}%/mês (n={int(n)})" if pd.notna(pct) else "—"
+
+    for t in HAZARD_HORIZONTES_MESES:
+        df_show_hz[f"Hazard @ {t}m"] = df_show_hz.apply(
+            lambda r: _fmt_hazard(r[f"hazard_{t}m_pct"], r[f"hazard_{t}m_n"]), axis=1
+        )
+    df_show_hz["Hazard — Vida Toda"] = df_show_hz.apply(
+        lambda r: _fmt_hazard(r["hazard_vida_toda_pct"], r["hazard_vida_toda_n"]), axis=1
+    )
+    df_show_hz = df_show_hz.rename(columns={"vida_toda_mes": 'Mês considerado "vida toda"'})
+
     cols_order_hz = (
         ["Plano"]
-        + [f"hazard_{t}m_pct" for t in HAZARD_HORIZONTES_MESES]
-        + ["hazard_vida_toda_pct", "vida_toda_mes"]
+        + [f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES]
+        + ["Hazard — Vida Toda", 'Mês considerado "vida toda"']
     )
-    df_show_hz = df_show_hz[cols_order_hz]
-    rename_hz = {f"hazard_{t}m_pct": f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES}
-    rename_hz["hazard_vida_toda_pct"] = "Hazard — Vida Toda"
-    rename_hz["vida_toda_mes"] = 'Mês considerado "vida toda"'
-    df_show_hz = df_show_hz.rename(columns=rename_hz)
-    for col in [f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES] + ["Hazard — Vida Toda"]:
-        df_show_hz[col] = df_show_hz[col].apply(lambda v: f"{v:.1f}%/mês" if pd.notna(v) else "—")
-    st.dataframe(df_show_hz, use_container_width=True, hide_index=True)
+    st.dataframe(df_show_hz[cols_order_hz], use_container_width=True, hide_index=True)
+    st.caption(
+        "\"(n=...)\" é a soma de clientes em risco nos meses usados naquele snapshot — "
+        "não confunda com o RMST completo (tempo médio de vida) mostrado mais acima: "
+        "aqui é o hazard no horizonte, lá é a média até esse horizonte. Números com n "
+        "pequeno (dezenas) variam bastante de um período pro outro — planos residuais "
+        "como \"Outros\" tendem a ter cauda mais ruidosa por serem uma categoria "
+        "heterogênea (não um plano de verdade)."
+    )
 
     st.markdown("**Curva de hazard mensal — como o risco muda ao longo do tempo de casa**")
     st.caption(

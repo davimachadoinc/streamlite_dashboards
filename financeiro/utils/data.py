@@ -2244,28 +2244,56 @@ def compute_hazard_snapshots(
     ponderado por exposição, técnica atuarial padrão) — pra suavizar ruído
     de meses isolados com poucas perdas. "Vida toda" usa a janela olhando
     só pra trás (não tem "depois" além do último mês confiável).
+
+    Cada snapshot também retorna o N em risco somado na janela
+    (`hazard_{tau}m_n` / `hazard_vida_toda_n`) — planos pequenos ou pontos
+    bem na cauda podem estar apoiados em poucas dezenas de clientes; expor
+    o N evita ler um hazard de cauda (ex: 20%/mês) como se tivesse a mesma
+    confiança de um hazard calculado sobre centenas de clientes.
+
+    Também retorna `hazard_global_pct`/`hazard_global_n`: o hazard médio
+    ponderado por exposição ao longo de TODA a tabela de vida (mês 0 até o
+    último mês confiável), não só uma janela. Decidido em sessão /grill-me
+    (2026-09-22): esse é o número que reconcilia com a intuição de "taxa de
+    churn = 1/RMST" — quando o horizonte observado (`max_obs_meses`) é bem
+    maior que o RMST completo, os dois convergem; quando não é (RMST perto
+    do teto de dados disponíveis, caso do PRO), `1/RMST` superestima o
+    churn porque trata clientes ainda vivos e censurados como se já
+    tivessem um desfecho conhecido — `hazard_global` não tem esse viés.
+    Ainda é bem diferente do hazard "vida toda" acima: `global` mistura
+    TODOS os meses (inclusive os primeiros, que concentram a maior parte
+    dos eventos); "vida toda" isola só quem já sobreviveu até o fim —
+    grupo pré-selecionado, naturalmente com risco menor.
     """
     linhas = []
     for plano, tabela in hazard_por_plano.items():
         max_mes_confiavel = int(tabela["mes"].max())
 
-        def hazard_pool(lo: int, hi: int) -> float | None:
+        def hazard_pool(lo: int, hi: int) -> tuple[float | None, int]:
             lo, hi = max(0, lo), min(max_mes_confiavel, hi)
             sub = tabela[(tabela["mes"] >= lo) & (tabela["mes"] <= hi)]
-            total_risco = sub["at_risk"].sum()
+            total_risco = int(sub["at_risk"].sum())
             if sub.empty or total_risco == 0:
-                return None
-            return sub["eventos"].sum() / total_risco * 100
+                return None, 0
+            return sub["eventos"].sum() / total_risco * 100, total_risco
 
         linha = {"plano": plano, "max_mes_confiavel": max_mes_confiavel}
         for tau in horizontes:
-            linha[f"hazard_{tau}m_pct"] = (
-                hazard_pool(tau - janela, tau + janela) if max_mes_confiavel >= tau else None
-            )
-        linha["hazard_vida_toda_pct"] = hazard_pool(
-            max_mes_confiavel - janela * 2, max_mes_confiavel
-        )
+            if max_mes_confiavel >= tau:
+                pct, n = hazard_pool(tau - janela, tau + janela)
+            else:
+                pct, n = None, 0
+            linha[f"hazard_{tau}m_pct"] = pct
+            linha[f"hazard_{tau}m_n"] = n
+        pct, n = hazard_pool(max_mes_confiavel - janela * 2, max_mes_confiavel)
+        linha["hazard_vida_toda_pct"] = pct
+        linha["hazard_vida_toda_n"] = n
         linha["vida_toda_mes"] = max_mes_confiavel
+
+        pct, n = hazard_pool(0, max_mes_confiavel)
+        linha["hazard_global_pct"] = pct
+        linha["hazard_global_n"] = n
+
         linhas.append(linha)
     return pd.DataFrame(linhas)
 
