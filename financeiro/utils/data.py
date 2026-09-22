@@ -1957,6 +1957,11 @@ RMST_HORIZONTES_MESES = [6, 12, 24, 36]
 _DIAS_POR_MES = 30.4368
 _LIFETIME_N_MIN = 5  # amostra mínima por plano pra entrar em curva/RMST
 
+# Spec do hazard por tenure decidida em sessão /grill-me (2026-09-22): vault
+# Obsidian, mesma nota acima, seção "Hazard por tenure".
+HAZARD_HORIZONTES_MESES = [6, 12, 24]
+_HAZARD_JANELA = 2  # meses de folga em cada snapshot, pra suavizar ruído
+
 
 @st.cache_data(ttl=72000)
 def load_lifetime_base() -> pd.DataFrame:
@@ -2175,6 +2180,92 @@ def compute_rmst_snapshots(
             linha[f"rmst_{tau}m"] = (
                 restricted_mean_survival_time(kmf, t=tau) if max_obs >= tau else None
             )
+        linhas.append(linha)
+    return pd.DataFrame(linhas)
+
+
+def compute_hazard_mensal_por_plano(
+    df: pd.DataFrame, n_min: int = _LIFETIME_N_MIN
+) -> dict:
+    """
+    Tabela de vida (life-table) mensal por plano: pra cada mês inteiro `t`
+    desde t0, quantos clientes ainda estavam em risco (duration_meses >= t)
+    e quantos perderam exatamente nesse mês. Hazard(t) = eventos/em_risco.
+
+    Diferente do RMST (área sob a curva = tempo médio de vida), aqui o
+    interesse é a taxa mês a mês — enxergar SE e COMO o risco de perda muda
+    com o tempo de casa (esperado: cai, porque quem aguenta mais tempo já
+    provou que fica — viés de sobrevivência). Decidido em sessão /grill-me
+    (2026-09-22) que "churn mensal por tempo de casa" = essa taxa
+    condicional (hazard), não uma média única tipo RMST.
+
+    Para de reportar um mês quando os clientes em risco caem abaixo de
+    `n_min` — a partir dali uma única perda isolada faz o hazard saltar
+    (ruído, não sinal). Retorna {plano: DataFrame(mes, at_risk, eventos,
+    hazard_pct)}, base tanto pro gráfico de curva quanto pros snapshots de
+    `compute_hazard_snapshots`.
+    """
+    resultado = {}
+    for plano, grupo in df.groupby("plano"):
+        if len(grupo) < n_min:
+            continue
+        duration = grupo["duration_meses"].to_numpy()
+        mes_evento = np.floor(duration).astype(int)
+        evento = grupo["evento"].to_numpy()
+        max_mes = int(duration.max())
+
+        linhas = []
+        for t in range(max_mes + 1):
+            em_risco = int((duration >= t).sum())
+            if em_risco < n_min:
+                break
+            eventos_t = int(((mes_evento == t) & (evento == 1)).sum())
+            linhas.append({
+                "mes": t, "at_risk": em_risco, "eventos": eventos_t,
+                "hazard_pct": eventos_t / em_risco * 100,
+            })
+        if linhas:
+            resultado[plano] = pd.DataFrame(linhas)
+    return resultado
+
+
+def compute_hazard_snapshots(
+    hazard_por_plano: dict,
+    horizontes: list[int] = HAZARD_HORIZONTES_MESES,
+    janela: int = _HAZARD_JANELA,
+) -> pd.DataFrame:
+    """
+    Snapshots do hazard mensal em horizontes fixos (6/12/24 meses) mais
+    "vida toda" (último mês com amostra confiável na tabela de vida do
+    plano), a partir de `compute_hazard_mensal_por_plano()`.
+
+    Cada snapshot agrega uma janela de +-`janela` meses ao redor do ponto —
+    soma de eventos ÷ soma de clientes em risco nesses meses (hazard médio
+    ponderado por exposição, técnica atuarial padrão) — pra suavizar ruído
+    de meses isolados com poucas perdas. "Vida toda" usa a janela olhando
+    só pra trás (não tem "depois" além do último mês confiável).
+    """
+    linhas = []
+    for plano, tabela in hazard_por_plano.items():
+        max_mes_confiavel = int(tabela["mes"].max())
+
+        def hazard_pool(lo: int, hi: int) -> float | None:
+            lo, hi = max(0, lo), min(max_mes_confiavel, hi)
+            sub = tabela[(tabela["mes"] >= lo) & (tabela["mes"] <= hi)]
+            total_risco = sub["at_risk"].sum()
+            if sub.empty or total_risco == 0:
+                return None
+            return sub["eventos"].sum() / total_risco * 100
+
+        linha = {"plano": plano, "max_mes_confiavel": max_mes_confiavel}
+        for tau in horizontes:
+            linha[f"hazard_{tau}m_pct"] = (
+                hazard_pool(tau - janela, tau + janela) if max_mes_confiavel >= tau else None
+            )
+        linha["hazard_vida_toda_pct"] = hazard_pool(
+            max_mes_confiavel - janela * 2, max_mes_confiavel
+        )
+        linha["vida_toda_mes"] = max_mes_confiavel
         linhas.append(linha)
     return pd.DataFrame(linhas)
 

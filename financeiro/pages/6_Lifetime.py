@@ -22,9 +22,10 @@ from utils.style import inject_css
 from utils.data import (
     PALETTE, PLAN_LABELS, PLAN_COLORS,
     chart_layout, no_data,
-    RMST_HORIZONTES_MESES,
+    RMST_HORIZONTES_MESES, HAZARD_HORIZONTES_MESES,
     load_lifetime_base, compute_lifetime_survival,
     fit_km_por_plano, compute_rmst_snapshots,
+    compute_hazard_mensal_por_plano, compute_hazard_snapshots,
 )
 
 inject_css()
@@ -228,3 +229,100 @@ with st.expander("ℹ️ Como ler esta página"):
           quando nem todo mundo já teve o evento de perda.
         """
     )
+
+st.divider()
+
+# ─────────────────────────────────────────────
+# RISCO DE CHURN POR TEMPO DE CASA (HAZARD MENSAL)
+# ─────────────────────────────────────────────
+st.subheader("Risco de Churn por Tempo de Casa (Hazard Mensal)")
+
+with st.expander("💡 O que é isso e em que difere do RMST acima?", expanded=True):
+    st.markdown(
+        """
+        As métricas acima (RMST, curva de sobrevivência) respondem "quanto tempo, em
+        média, um cliente dura". Essa seção responde uma pergunta diferente: **o risco de
+        um cliente sair muda conforme ele acumula tempo de casa?**
+
+        **Como é calculado:** para cada mês de tempo de casa (ex: mês 6, mês 12...), olha-se
+        só pra quem *já chegou vivo* até esse mês, e pergunta: desses, quantos saíram
+        naquele mês? Isso é o **hazard** — a chance condicional de perda no mês seguinte,
+        dado o tempo de casa já cumprido. É diferente de "% de churn médio" porque não
+        assume que o risco é constante ao longo da vida do cliente — normalmente **não é**:
+        cliente recém-chegado ainda está testando o produto (risco mais alto), enquanto
+        quem já aguentou 2 anos já provou que fica (risco mais baixo) — viés de
+        sobrevivência natural de qualquer base de assinatura.
+
+        **"Vida toda"**: não é uma perda observada no fim da vida do cliente, é o hazard no
+        **último ponto em que ainda sobra amostra suficiente** pra confiar no número
+        (mesmo critério de "melhor estimativa disponível" usado no RMST completo acima).
+
+        **Por que não bate com o "% de churn" da página de Desativações/MRR:** aqui a conta
+        é por *cliente* e por *tempo de casa* (lógica atuarial); lá a conta é por *R$ de MRR
+        perdido ÷ MRR inicial do mês* (lógica de waterfall). São duas lentes complementares
+        sobre o mesmo fenômeno, não a mesma métrica — não estranhe se os números não
+        coincidirem.
+        """
+    )
+
+hazard_por_plano = compute_hazard_mensal_por_plano(df)
+
+if not hazard_por_plano:
+    no_data("Nenhum plano com amostra suficiente para calcular hazard por tempo de casa.")
+else:
+    df_hazard_snap = compute_hazard_snapshots(hazard_por_plano)
+
+    st.markdown("**Snapshots — chance de sair no mês seguinte, por tempo de casa já cumprido**")
+    st.caption(
+        "Cada snapshot agrega uma janela de ±2 meses ao redor do ponto (soma de perdas "
+        "÷ soma de clientes em risco nesses meses) pra suavizar ruído de meses isolados. "
+        "Fica em branco quando o plano ainda não tem clientes suficientes com esse tempo "
+        "de casa pra um número confiável."
+    )
+
+    df_show_hz = df_hazard_snap.sort_values("max_mes_confiavel", ascending=False).copy()
+    df_show_hz["Plano"] = df_show_hz["plano"].map(PLAN_LABELS).fillna(df_show_hz["plano"])
+    cols_order_hz = (
+        ["Plano"]
+        + [f"hazard_{t}m_pct" for t in HAZARD_HORIZONTES_MESES]
+        + ["hazard_vida_toda_pct", "vida_toda_mes"]
+    )
+    df_show_hz = df_show_hz[cols_order_hz]
+    rename_hz = {f"hazard_{t}m_pct": f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES}
+    rename_hz["hazard_vida_toda_pct"] = "Hazard — Vida Toda"
+    rename_hz["vida_toda_mes"] = 'Mês considerado "vida toda"'
+    df_show_hz = df_show_hz.rename(columns=rename_hz)
+    for col in [f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES] + ["Hazard — Vida Toda"]:
+        df_show_hz[col] = df_show_hz[col].apply(lambda v: f"{v:.1f}%/mês" if pd.notna(v) else "—")
+    st.dataframe(df_show_hz, use_container_width=True, hide_index=True)
+
+    st.markdown("**Curva de hazard mensal — como o risco muda ao longo do tempo de casa**")
+    st.caption(
+        "Sem suavização (mês a mês) — mostra picos de risco que os snapshots acima podem "
+        "esconder entre os pontos fixos. Cada linha para no mês em que a amostra daquele "
+        "plano fica pequena demais pra confiar no número."
+    )
+    fig = go.Figure()
+    for plano, tabela in sorted(
+        hazard_por_plano.items(), key=lambda kv: -kv[1]["at_risk"].iloc[0]
+    ):
+        label = PLAN_LABELS.get(plano, plano.title())
+        cor = PLAN_COLORS.get(plano, PALETTE[3])
+        fig.add_scatter(
+            x=tabela["mes"], y=tabela["hazard_pct"],
+            name=label, mode="lines+markers",
+            line=dict(color=cor, width=2), marker=dict(size=5),
+            customdata=tabela["at_risk"],
+            hovertemplate=(
+                "%{x} meses<br>Hazard: %{y:.1f}%/mês<br>Em risco: %{customdata}"
+                "<extra>" + label + "</extra>"
+            ),
+        )
+    # chart_layout() PRECISA vir antes do update_layout customizado (mesmo
+    # gotcha documentado no gráfico de sobrevivência acima e nas Páginas 2 e 5).
+    fig = chart_layout(fig, height=420, legend_bottom=True)
+    fig.update_layout(
+        yaxis=dict(title="Hazard mensal (%)", ticksuffix="%"),
+        xaxis=dict(title="Meses desde a primeira liquidação (t0)", type="linear"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
