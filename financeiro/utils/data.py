@@ -2235,21 +2235,19 @@ def compute_hazard_snapshots(
     janela: int = _HAZARD_JANELA,
 ) -> pd.DataFrame:
     """
-    Snapshots do hazard mensal em horizontes fixos (6/12/24 meses) mais
-    "vida toda" (último mês com amostra confiável na tabela de vida do
-    plano), a partir de `compute_hazard_mensal_por_plano()`.
+    Snapshots do hazard mensal em horizontes fixos (6/12/24 meses), a
+    partir de `compute_hazard_mensal_por_plano()`.
 
     Cada snapshot agrega uma janela de +-`janela` meses ao redor do ponto —
     soma de eventos ÷ soma de clientes em risco nesses meses (hazard médio
     ponderado por exposição, técnica atuarial padrão) — pra suavizar ruído
-    de meses isolados com poucas perdas. "Vida toda" usa a janela olhando
-    só pra trás (não tem "depois" além do último mês confiável).
+    de meses isolados com poucas perdas.
 
     Cada snapshot também retorna o N em risco somado na janela
-    (`hazard_{tau}m_n` / `hazard_vida_toda_n`) — planos pequenos ou pontos
-    bem na cauda podem estar apoiados em poucas dezenas de clientes; expor
-    o N evita ler um hazard de cauda (ex: 20%/mês) como se tivesse a mesma
-    confiança de um hazard calculado sobre centenas de clientes.
+    (`hazard_{tau}m_n`) — planos pequenos ou pontos bem na cauda podem
+    estar apoiados em poucas dezenas de clientes; expor o N evita ler um
+    hazard de cauda (ex: 20%/mês) como se tivesse a mesma confiança de um
+    hazard calculado sobre centenas de clientes.
 
     Também retorna `hazard_global_pct`/`hazard_global_n`: o hazard médio
     ponderado por exposição ao longo de TODA a tabela de vida (mês 0 até o
@@ -2260,10 +2258,12 @@ def compute_hazard_snapshots(
     do teto de dados disponíveis, caso do PRO), `1/RMST` superestima o
     churn porque trata clientes ainda vivos e censurados como se já
     tivessem um desfecho conhecido — `hazard_global` não tem esse viés.
-    Ainda é bem diferente do hazard "vida toda" acima: `global` mistura
-    TODOS os meses (inclusive os primeiros, que concentram a maior parte
-    dos eventos); "vida toda" isola só quem já sobreviveu até o fim —
-    grupo pré-selecionado, naturalmente com risco menor.
+
+    (Removido em 2026-09-23 um quarto snapshot "vida toda" — hazard só de
+    quem sobreviveu até o último mês confiável — porque na prática ficava
+    apoiado em amostra pequena demais pra agregar informação além do que
+    `hazard_global` e a curva completa já mostram; ver [[FIN] Dashboard
+    _Lifetime_Sobrevivencia] no vault Obsidian.)
     """
     linhas = []
     for plano, tabela in hazard_por_plano.items():
@@ -2285,10 +2285,6 @@ def compute_hazard_snapshots(
                 pct, n = None, 0
             linha[f"hazard_{tau}m_pct"] = pct
             linha[f"hazard_{tau}m_n"] = n
-        pct, n = hazard_pool(max_mes_confiavel - janela * 2, max_mes_confiavel)
-        linha["hazard_vida_toda_pct"] = pct
-        linha["hazard_vida_toda_n"] = n
-        linha["vida_toda_mes"] = max_mes_confiavel
 
         pct, n = hazard_pool(0, max_mes_confiavel)
         linha["hazard_global_pct"] = pct

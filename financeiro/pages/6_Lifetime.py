@@ -253,16 +253,12 @@ with st.expander("💡 O que é isso e em que difere do RMST acima?", expanded=T
         quem já aguentou 2 anos já provou que fica (risco mais baixo) — viés de
         sobrevivência natural de qualquer base de assinatura.
 
-        **Três números de hazard aparecem nesta seção — não são a mesma coisa:**
+        **Dois números de hazard aparecem nesta seção — não são a mesma coisa:**
         - **Hazard Médio (ciclo completo)**: mistura todos os meses, do 0 ao último
           confiável. É o que mais se aproxima da intuição "churn ≈ 1/RMST" — mas não é
           igual a ela (ver caixa abaixo).
         - **Snapshots por tenure (@6m/@12m/@24m)**: hazard só naquele ponto específico do
           tempo de casa.
-        - **"Vida toda"**: hazard só de quem já sobreviveu até o último mês com amostra
-          confiável — um **horizonte máximo**, não uma média, e o grupo mais pré-selecionado
-          possível (só quem já provou que fica). É por isso que normalmente é o **mais baixo**
-          dos três, não o mais representativo do plano inteiro.
 
         **Sobre comparar com "1/RMST":** RMST é restrito a um horizonte (o maior tempo já
         observado naquele plano). Quando esse horizonte é bem maior que o RMST (ex: Starter,
@@ -291,11 +287,11 @@ else:
     st.caption(
         "Média ponderada do hazard do mês 0 até o último mês confiável — mistura TODOS os "
         "meses, inclusive os primeiros (que concentram a maior parte das perdas). É este "
-        "número, não o \"vida toda\" mais abaixo, que se aproxima da intuição de \"taxa de "
-        "churn ≈ 1/RMST\": quando o horizonte observado é bem maior que o RMST, os dois "
-        "convergem (ex: Starter); quando o RMST está perto do teto de dados disponíveis "
-        "(ex: PRO, RMST=42m com só 68m de histórico), 1/RMST superestima o churn — trata "
-        "clientes ainda ativos e censurados como se já tivessem um desfecho."
+        "número que se aproxima da intuição de \"taxa de churn ≈ 1/RMST\": quando o "
+        "horizonte observado é bem maior que o RMST, os dois convergem (ex: Starter); "
+        "quando o RMST está perto do teto de dados disponíveis (ex: PRO, RMST=42m com só "
+        "68m de histórico), 1/RMST superestima o churn — trata clientes ainda ativos e "
+        "censurados como se já tivessem um desfecho."
     )
     df_hz_sorted = df_hazard_snap.sort_values("max_mes_confiavel", ascending=False)
     cols_global = st.columns(len(df_hz_sorted))
@@ -326,16 +322,8 @@ else:
         df_show_hz[f"Hazard @ {t}m"] = df_show_hz.apply(
             lambda r: _fmt_hazard(r[f"hazard_{t}m_pct"], r[f"hazard_{t}m_n"]), axis=1
         )
-    df_show_hz["Hazard — Vida Toda"] = df_show_hz.apply(
-        lambda r: _fmt_hazard(r["hazard_vida_toda_pct"], r["hazard_vida_toda_n"]), axis=1
-    )
-    df_show_hz = df_show_hz.rename(columns={"vida_toda_mes": 'Mês considerado "vida toda"'})
 
-    cols_order_hz = (
-        ["Plano"]
-        + [f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES]
-        + ["Hazard — Vida Toda", 'Mês considerado "vida toda"']
-    )
+    cols_order_hz = ["Plano"] + [f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES]
     st.dataframe(df_show_hz[cols_order_hz], use_container_width=True, hide_index=True)
     st.caption(
         "\"(n=...)\" é a soma de clientes em risco nos meses usados naquele snapshot — "
