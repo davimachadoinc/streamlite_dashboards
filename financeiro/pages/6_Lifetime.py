@@ -335,10 +335,20 @@ else:
     )
 
     st.markdown("**Curva de hazard mensal — como o risco muda ao longo do tempo de casa**")
+
+    # Eixo Y limitado pelo maior hazard fora de "outros" — categoria residual
+    # e ruidosa (ver caption acima) cujos picos (20-36%) esmagavam a escala e
+    # escondiam a variação dos planos de verdade. "Outros" continua no
+    # gráfico, só sai cortado no topo quando ultrapassa o teto.
+    _planos_escala = {p: t for p, t in hazard_por_plano.items() if p != "outros"} or hazard_por_plano
+    y_max = max(t["hazard_pct"].max() for t in _planos_escala.values()) * 1.15
+
     st.caption(
         "Sem suavização (mês a mês) — mostra picos de risco que os snapshots acima podem "
         "esconder entre os pontos fixos. Cada linha para no mês em que a amostra daquele "
-        "plano fica pequena demais pra confiar no número."
+        "plano fica pequena demais pra confiar no número. Eixo Y limitado ao maior hazard "
+        "fora de \"Outros\" (categoria residual/ruidosa) — se a linha de Outros sair da "
+        "área visível, é porque ela ultrapassou esse teto."
     )
     fig = go.Figure()
     for plano, tabela in sorted(
@@ -360,7 +370,7 @@ else:
     # gotcha documentado no gráfico de sobrevivência acima e nas Páginas 2 e 5).
     fig = chart_layout(fig, height=420, legend_bottom=True)
     fig.update_layout(
-        yaxis=dict(title="Hazard mensal (%)", ticksuffix="%"),
+        yaxis=dict(title="Hazard mensal (%)", ticksuffix="%", range=[0, y_max]),
         xaxis=dict(title="Meses desde a primeira liquidação (t0)", type="linear"),
     )
     st.plotly_chart(fig, use_container_width=True)
