@@ -39,6 +39,7 @@ from utils.data import (
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data, fmt_brl,
     load_mrr_inicio_mensal, load_fechamentos_mrr_mensal, load_desativacoes_mensais,
+    load_desativacoes_total_parcial,
 )
 
 inject_css()
@@ -60,6 +61,7 @@ with st.spinner("Carregando dados de MRR..."):
     df_inicio_raw = load_mrr_inicio_mensal()
     df_fech_raw   = load_fechamentos_mrr_mensal()
     df_desativ_raw = load_desativacoes_mensais()
+    df_desativ_tp_raw = load_desativacoes_total_parcial()
 
 if df_inicio_raw.empty:
     no_data("Nenhum dado de MRR encontrado.")
@@ -81,17 +83,45 @@ df_desativ = (
     .rename(columns={"mrr_perdido": "desativacoes_mrr"})
 )
 
-df = df_inicio.merge(df_fech_pivot, on="mes", how="left").merge(df_desativ, on="mes", how="left")
+# Novos Clientes (contagem) — mesma regra do formulário de fechamento usada
+# em Novas Vendas acima (new_deal = TRUE), mas em nº de clientes, não R$.
+df_fech_clientes_pivot = (
+    df_fech_raw.pivot_table(index="mes", columns="tipo", values="clientes", aggfunc="sum")
+    .reindex(columns=["novo"], fill_value=0)
+    .reset_index()
+    .rename(columns={"novo": "novos_clientes"})
+)
+
+# Desativações Totais (contagem) — cliente sem nenhum produto de mensalidade
+# ativo restante (mesmo critério do KPI "Desativações Totais" do dashboard).
+df_desativ_totais = (
+    df_desativ_tp_raw[df_desativ_tp_raw["tipo"] == "total"]
+    .groupby("mes", as_index=False)["clientes_desativados"]
+    .sum()
+    .rename(columns={"clientes_desativados": "desativacoes_totais_clientes"})
+)
+
+df = (
+    df_inicio
+    .merge(df_fech_pivot, on="mes", how="left")
+    .merge(df_desativ, on="mes", how="left")
+    .merge(df_fech_clientes_pivot, on="mes", how="left")
+    .merge(df_desativ_totais, on="mes", how="left")
+)
 # BigQuery NUMERIC pode voltar como Decimal (ex: mrr_perdido) em vez de float,
 # dependendo da coluna/agregação — cast explícito evita erro de aritmética
 # ao misturar Decimal e float no mesmo DataFrame.
-for col in ["mrr_inicio", "novas_vendas_mrr", "upsell_mrr", "desativacoes_mrr"]:
+for col in [
+    "mrr_inicio", "novas_vendas_mrr", "upsell_mrr", "desativacoes_mrr",
+    "novos_clientes", "desativacoes_totais_clientes",
+]:
     df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
 df = df.sort_values("mes")
 df = df[df["mes"] >= pd.Timestamp("2026-01-01")]
 df["variacao_liquida"] = df["novas_vendas_mrr"] + df["upsell_mrr"] - df["desativacoes_mrr"]
 df["mrr_fim"] = df["mrr_inicio"] + df["variacao_liquida"]
+df["delta_clientes"] = df["novos_clientes"] - df["desativacoes_totais_clientes"]
 df["nrr"] = (
     (df["mrr_inicio"] + df["upsell_mrr"] - df["desativacoes_mrr"])
     / df["mrr_inicio"].where(df["mrr_inicio"] > 0)
@@ -181,7 +211,45 @@ st.plotly_chart(chart_layout(fig, height=440, legend_bottom=True), use_container
 st.divider()
 
 # ─────────────────────────────────────────────
-# GRÁFICO 2 — Variação de MRR (waterfall gerencial)
+# GRÁFICO 2 — Desativações Totais / Novos Clientes (empilhado) + Delta
+# ─────────────────────────────────────────────
+st.subheader("Desativações Totais e Novos Clientes — com Delta")
+st.caption(
+    "Novos Clientes: contagem de clientes distintos em Fechamentos_com_ajustes com "
+    "new_deal = TRUE (mesma regra do formulário de fechamento de Novas Vendas acima, "
+    "em nº de clientes em vez de R$). Desativações Totais: cliente sem nenhum produto "
+    "de mensalidade ativo restante (mesmo critério do KPI 'Desativações Totais')."
+)
+
+fig_delta = go.Figure()
+fig_delta.add_bar(
+    x=df_fmt["mes_fmt"], y=df_fmt["novos_clientes"],
+    name="Novos Clientes", marker_color=COR_NOVAS_VENDAS, opacity=0.9,
+    hovertemplate="<b>%{x}</b><br>Novos Clientes: %{y:,.0f}<extra></extra>",
+)
+fig_delta.add_bar(
+    x=df_fmt["mes_fmt"], y=-df_fmt["desativacoes_totais_clientes"],
+    name="Desativações Totais", marker_color=COR_DESATIVACAO, opacity=0.9,
+    hovertemplate="<b>%{x}</b><br>Desativações Totais: %{customdata:,.0f}<extra></extra>",
+    customdata=df_fmt["desativacoes_totais_clientes"],
+)
+fig_delta.add_scatter(
+    x=df_fmt["mes_fmt"], y=df_fmt["delta_clientes"],
+    name="Delta", mode="lines+markers",
+    line=dict(color=COR_NRR, width=2.5), marker=dict(size=7),
+    hovertemplate="<b>%{x}</b><br>Delta: %{y:,.0f}<extra></extra>",
+)
+fig_delta.update_layout(
+    barmode="relative",
+    yaxis=dict(title="Nº de Clientes"),
+    xaxis=dict(categoryorder="array", categoryarray=x_order, type="category"),
+)
+st.plotly_chart(chart_layout(fig_delta, height=440, legend_bottom=True), use_container_width=True)
+
+st.divider()
+
+# ─────────────────────────────────────────────
+# GRÁFICO 3 — Variação de MRR (waterfall gerencial)
 # ─────────────────────────────────────────────
 st.subheader("Variação de MRR (visão gerencial)")
 st.caption(
