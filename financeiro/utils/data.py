@@ -64,6 +64,40 @@ PLAN_COLORS = {
     "outros":  "#292929",
 }
 
+# Faixas de membros contratadas (padrão validado em [[planos-depara]] do vault
+# Obsidian) — ordinal por natureza, do menor pro maior porte de igreja.
+FAIXA_ORDER = [
+    "ate_100", "101_300", "301_600", "601_1000",
+    "1001_2500", "2501_5000", "5001_10000", "10001_mais",
+]
+
+FAIXA_LABELS = {
+    "ate_100":     "1-100",
+    "101_300":     "101-300",
+    "301_600":     "301-600",
+    "601_1000":    "601-1.000",
+    "1001_2500":   "1.001-2.500",
+    "2501_5000":   "2.501-5.000",
+    "5001_10000":  "5.001-10.000",
+    "10001_mais":  "10.000+",
+    "sem_faixa":   "Sem faixa",
+}
+
+# Rampa sequencial (1 matiz só, escuro -> claro) na mesma matiz do verde da
+# marca (#6eda2c) — dimensão ordinal (porte da igreja), não categórica, por
+# isso não usa cores categóricas distintas como PLAN_COLORS.
+FAIXA_COLORS = {
+    "ate_100":     "#2a570f",
+    "101_300":     "#3c7b16",
+    "301_600":     "#4d9f1c",
+    "601_1000":    "#5fc322",
+    "1001_2500":   "#73db34",
+    "2501_5000":   "#8ce258",
+    "5001_10000":  "#a5e87c",
+    "10001_mais":  "#bdeea0",
+    "sem_faixa":   "#4c4c4c",
+}
+
 # Filtro SQL para excluir linhas de módulos (KIDS, JORNADA, LOJA, TOTEM, VÍDEOS, módulos STARTER)
 # Usar substituindo {col} pelo nome da coluna adequado na query
 _EXCL_MODULOS = """
@@ -117,6 +151,25 @@ _PLAN_CASE = """
       WHEN {col} LIKE '%App da Igreja%'   THEN 'starter'
       WHEN {col} LIKE '%Squad as a Service%' THEN 'squad'
       ELSE 'outros'
+    END
+"""
+
+# CASE SQL para extrair a faixa de membros CONTRATADA (usar substituindo {col}).
+# Regra validada em [[planos-depara]] (vault Obsidian) — mesmos 8 buckets usados
+# na tabela de preços vigente. É a faixa contratada no Superlógica, não a
+# contagem real de pessoas cuidadas (podem divergir, ver nota no vault).
+_FAIXA_MEMBROS_CASE = """
+    CASE
+      WHEN {col} LIKE '%1 - 100%' OR {col} LIKE '%1 a 100%'
+        OR {col} LIKE '%0 - 100%' OR {col} LIKE '%0 - 1000%'  THEN 'ate_100'
+      WHEN {col} LIKE '%101 - 300%'     THEN '101_300'
+      WHEN {col} LIKE '%301 - 600%'     THEN '301_600'
+      WHEN {col} LIKE '%601 - 1000%'    THEN '601_1000'
+      WHEN {col} LIKE '%1001 - 2500%'   THEN '1001_2500'
+      WHEN {col} LIKE '%2501 - 5000%' OR {col} LIKE '%2501 - 7500%' THEN '2501_5000'
+      WHEN {col} LIKE '%5001 - 10000%' OR {col} LIKE '%7501 - 12500%' THEN '5001_10000'
+      WHEN {col} LIKE '%10001+%' OR {col} LIKE '%12501 - 20000%' THEN '10001_mais'
+      ELSE 'sem_faixa'
     END
 """
 
@@ -1979,6 +2032,10 @@ def load_lifetime_base() -> pd.DataFrame:
       porque boa parte dos clientes paga o Setup isolado no dia 1 (t0), sem
       nenhum item de plano no mesmo boleto; casar só no dia do t0 jogava a
       maioria em 'outros' (medido: 55% -> 11% ao soltar essa trava).
+    - Faixa de membros de entrada = classificação (_FAIXA_MEMBROS_CASE) da
+      MESMA linha vencedora usada pro plano de entrada — garante que as duas
+      dimensões (plano, faixa) descrevem o mesmo contrato inicial, não duas
+      liquidações diferentes do cliente.
     - Desativação total = cliente sem NENHUMA linha de mensalidade ativa
       hoje (`dt_fim_mens IS NULL`) em vw-splgc-tabela_mrr_validos, data =
       COALESCE(dt_desativacao_sac, MAX(dt_fim_mens) das linhas encerradas).
@@ -2007,7 +2064,8 @@ def load_lifetime_base() -> pd.DataFrame:
     plano_t0 AS (
       SELECT
         l.st_sincro_sac,
-        {_PLAN_CASE.format(col="l.comp_st_descricao_prd")} AS plano
+        {_PLAN_CASE.format(col="l.comp_st_descricao_prd")} AS plano,
+        {_FAIXA_MEMBROS_CASE.format(col="l.comp_st_descricao_prd")} AS faixa_membros
       FROM liq l
       QUALIFY ROW_NUMBER() OVER (
         PARTITION BY l.st_sincro_sac
@@ -2061,6 +2119,7 @@ def load_lifetime_base() -> pd.DataFrame:
     SELECT
       pl.st_sincro_sac,
       pt.plano,
+      pt.faixa_membros,
       pl.t0,
       um.ultima_liq_mensalidade,
       dt.data_desativacao
@@ -2075,6 +2134,7 @@ def load_lifetime_base() -> pd.DataFrame:
         df["ultima_liq_mensalidade"] = pd.to_datetime(df["ultima_liq_mensalidade"])
         df["data_desativacao"] = pd.to_datetime(df["data_desativacao"])
         df["plano"] = df["plano"].fillna("outros")
+        df["faixa_membros"] = df["faixa_membros"].fillna("sem_faixa")
     return df
 
 
@@ -2127,20 +2187,22 @@ def compute_lifetime_survival(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def fit_km_por_plano(df: pd.DataFrame, n_min: int = _LIFETIME_N_MIN) -> dict:
+def fit_km_por_plano(df: pd.DataFrame, n_min: int = _LIFETIME_N_MIN, col: str = "plano") -> dict:
     """
-    Um KaplanMeierFitter por plano (só planos com >= n_min clientes).
-    Retorna {plano: (kmf, n_clientes)}.
+    Um KaplanMeierFitter por valor distinto de `col` (só grupos com >= n_min
+    clientes). Generalizado pra segmentar por qualquer coluna categórica da
+    base de sobrevivência — usado hoje com `col="plano"` (default) e
+    `col="faixa_membros"`. Retorna {valor_de_col: (kmf, n_clientes)}.
     """
     from lifelines import KaplanMeierFitter
 
     resultado = {}
-    for plano, grupo in df.groupby("plano"):
+    for chave, grupo in df.groupby(col):
         if len(grupo) < n_min:
             continue
         kmf = KaplanMeierFitter()
-        kmf.fit(grupo["duration_meses"], event_observed=grupo["evento"], label=plano)
-        resultado[plano] = (kmf, len(grupo))
+        kmf.fit(grupo["duration_meses"], event_observed=grupo["evento"], label=chave)
+        resultado[chave] = (kmf, len(grupo))
     return resultado
 
 
@@ -2148,30 +2210,34 @@ def compute_rmst_snapshots(
     df: pd.DataFrame,
     horizontes: list[int] = RMST_HORIZONTES_MESES,
     n_min: int = _LIFETIME_N_MIN,
+    col: str = "plano",
 ) -> pd.DataFrame:
     """
-    RMST (restricted mean survival time, em meses) por plano, em cada
-    horizonte de `horizontes`, mais o **RMST completo** (`rmst_completo`) —
-    a área sob a curva até o maior tempo observado (`max_obs_meses`) daquele
-    plano, a melhor estimativa disponível de "tempo médio de vida" quando
-    nem todo mundo já teve o evento de perda (impossível calcular uma média
-    de verdade sem essa restrição, porque a cauda direita é censurada).
-    Horizontes fixos maiores que `max_obs_meses` ficam None — evita RMST
-    calculado sobre extrapolação (ex: plano com pouco tempo de mercado
-    ainda não tem follow-up de 24/36 meses). Ver spec no vault.
+    RMST (restricted mean survival time, em meses) por valor distinto de
+    `col`, em cada horizonte de `horizontes`, mais o **RMST completo**
+    (`rmst_completo`) — a área sob a curva até o maior tempo observado
+    (`max_obs_meses`) daquele grupo, a melhor estimativa disponível de
+    "tempo médio de vida" quando nem todo mundo já teve o evento de perda
+    (impossível calcular uma média de verdade sem essa restrição, porque a
+    cauda direita é censurada). Horizontes fixos maiores que `max_obs_meses`
+    ficam None — evita RMST calculado sobre extrapolação (ex: grupo com
+    pouco tempo de mercado ainda não tem follow-up de 24/36 meses). Ver spec
+    no vault. Generalizado com `col` (default "plano") pra também segmentar
+    por `faixa_membros`; a coluna de saída continua chamada `plano` por
+    compatibilidade com o restante do pipeline (guarda o valor de `col`).
     """
     from lifelines import KaplanMeierFitter
     from lifelines.utils import restricted_mean_survival_time
 
     linhas = []
-    for plano, grupo in df.groupby("plano"):
+    for chave, grupo in df.groupby(col):
         if len(grupo) < n_min:
             continue
         max_obs = grupo["duration_meses"].max()
         kmf = KaplanMeierFitter()
         kmf.fit(grupo["duration_meses"], event_observed=grupo["evento"])
         linha = {
-            "plano": plano,
+            "plano": chave,
             "n_clientes": len(grupo),
             "max_obs_meses": max_obs,
             "rmst_completo": restricted_mean_survival_time(kmf, t=max_obs),
@@ -2185,12 +2251,13 @@ def compute_rmst_snapshots(
 
 
 def compute_hazard_mensal_por_plano(
-    df: pd.DataFrame, n_min: int = _LIFETIME_N_MIN
+    df: pd.DataFrame, n_min: int = _LIFETIME_N_MIN, col: str = "plano"
 ) -> dict:
     """
-    Tabela de vida (life-table) mensal por plano: pra cada mês inteiro `t`
-    desde t0, quantos clientes ainda estavam em risco (duration_meses >= t)
-    e quantos perderam exatamente nesse mês. Hazard(t) = eventos/em_risco.
+    Tabela de vida (life-table) mensal por valor distinto de `col`: pra cada
+    mês inteiro `t` desde t0, quantos clientes ainda estavam em risco
+    (duration_meses >= t) e quantos perderam exatamente nesse mês.
+    Hazard(t) = eventos/em_risco.
 
     Diferente do RMST (área sob a curva = tempo médio de vida), aqui o
     interesse é a taxa mês a mês — enxergar SE e COMO o risco de perda muda
@@ -2201,12 +2268,13 @@ def compute_hazard_mensal_por_plano(
 
     Para de reportar um mês quando os clientes em risco caem abaixo de
     `n_min` — a partir dali uma única perda isolada faz o hazard saltar
-    (ruído, não sinal). Retorna {plano: DataFrame(mes, at_risk, eventos,
-    hazard_pct)}, base tanto pro gráfico de curva quanto pros snapshots de
-    `compute_hazard_snapshots`.
+    (ruído, não sinal). Retorna {valor_de_col: DataFrame(mes, at_risk,
+    eventos, hazard_pct)}, base tanto pro gráfico de curva quanto pros
+    snapshots de `compute_hazard_snapshots`. Generalizado com `col`
+    (default "plano") pra também segmentar por `faixa_membros`.
     """
     resultado = {}
-    for plano, grupo in df.groupby("plano"):
+    for chave, grupo in df.groupby(col):
         if len(grupo) < n_min:
             continue
         duration = grupo["duration_meses"].to_numpy()
@@ -2225,7 +2293,7 @@ def compute_hazard_mensal_por_plano(
                 "hazard_pct": eventos_t / em_risco * 100,
             })
         if linhas:
-            resultado[plano] = pd.DataFrame(linhas)
+            resultado[chave] = pd.DataFrame(linhas)
     return resultado
 
 

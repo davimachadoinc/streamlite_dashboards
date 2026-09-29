@@ -21,6 +21,7 @@ st.session_state["_page_key"] = "lifetime"
 from utils.style import inject_css
 from utils.data import (
     PALETTE, PLAN_LABELS, PLAN_COLORS,
+    FAIXA_ORDER, FAIXA_LABELS, FAIXA_COLORS,
     chart_layout, no_data,
     RMST_HORIZONTES_MESES, HAZARD_HORIZONTES_MESES,
     load_lifetime_base, compute_lifetime_survival,
@@ -371,6 +372,185 @@ else:
     fig = chart_layout(fig, height=420, legend_bottom=True)
     fig.update_layout(
         yaxis=dict(title="Hazard mensal (%)", ticksuffix="%", range=[0, y_max]),
+        xaxis=dict(title="Meses desde a primeira liquidação (t0)", type="linear"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+st.divider()
+
+# ─────────────────────────────────────────────
+# CATEGORIZAÇÃO POR FAIXA DE MEMBROS
+# ─────────────────────────────────────────────
+st.header("Churn por Faixa de Membros")
+st.caption(
+    "Mesmas 3 análises acima (curva de sobrevivência, RMST, hazard por tempo de "
+    "casa), agora segmentadas por faixa de membros CONTRATADA em vez de plano — "
+    "ajuda a ver se igrejas maiores/menores têm lifetime e risco de churn "
+    "diferentes, independente do plano. Faixas ordenadas da menor pra maior "
+    "(não por tamanho de amostra, diferente das seções por Plano acima), já que "
+    "aqui a dimensão é ordinal."
+)
+
+
+def _ordem_faixa(chave: str) -> int:
+    return FAIXA_ORDER.index(chave) if chave in FAIXA_ORDER else len(FAIXA_ORDER)
+
+
+# ── Curva de sobrevivência por faixa ───────────
+st.subheader("Curva de Sobrevivência por Faixa de Membros (faixa de entrada)")
+st.caption(
+    "Cada cliente é rotulado pela faixa de membros da MESMA liquidação usada "
+    "pra definir o plano de entrada acima — não muda de categoria se o cliente "
+    "mudar de faixa depois (upsell/downsell de tier). Faixas com poucos "
+    "clientes ficam de fora (amostra insuficiente pra uma curva confiável)."
+)
+
+kms_por_faixa = fit_km_por_plano(df, col="faixa_membros")
+
+if not kms_por_faixa:
+    no_data("Nenhuma faixa de membros com amostra suficiente para curva de sobrevivência.")
+else:
+    fig = go.Figure()
+    for faixa, (kmf, n) in sorted(kms_por_faixa.items(), key=lambda kv: _ordem_faixa(kv[0])):
+        sf = kmf.survival_function_.reset_index()
+        sf.columns = ["meses", "sobrevivencia"]
+        label = FAIXA_LABELS.get(faixa, faixa)
+        cor = FAIXA_COLORS.get(faixa, PALETTE[3])
+        fig.add_scatter(
+            x=sf["meses"], y=sf["sobrevivencia"] * 100,
+            name=f"{label} (n={n})",
+            mode="lines", line=dict(color=cor, width=2, shape="hv"),
+            hovertemplate="%{x:.0f} meses<br>%{y:.1f}% ainda ativos<extra>" + label + "</extra>",
+        )
+    # chart_layout() PRECISA vir antes do update_layout customizado (mesmo
+    # gotcha documentado nas seções por Plano acima e nas Páginas 2 e 5).
+    fig = chart_layout(fig, height=440, legend_bottom=True)
+    fig.update_layout(
+        yaxis=dict(title="% de clientes ainda ativos", ticksuffix="%", range=[0, 100]),
+        xaxis=dict(title="Meses desde a primeira liquidação (t0)", type="linear"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+st.divider()
+
+# ── RMST por faixa ─────────────────────────────
+st.subheader("Tempo Médio de Vida Estimado por Faixa de Membros")
+st.caption(
+    "Mesma leitura do RMST explicado no expander no topo da página, agora "
+    "segmentado por faixa de membros."
+)
+
+df_rmst_faixa = compute_rmst_snapshots(df, col="faixa_membros")
+
+if df_rmst_faixa.empty:
+    no_data("Nenhuma faixa de membros com amostra suficiente para RMST.")
+else:
+    df_rmst_faixa_sorted = df_rmst_faixa.copy()
+    df_rmst_faixa_sorted["_ordem"] = df_rmst_faixa_sorted["plano"].apply(_ordem_faixa)
+    df_rmst_faixa_sorted = df_rmst_faixa_sorted.sort_values("_ordem")
+
+    cols_medio = st.columns(len(df_rmst_faixa_sorted))
+    for col, (_, row) in zip(cols_medio, df_rmst_faixa_sorted.iterrows()):
+        label = FAIXA_LABELS.get(row["plano"], row["plano"])
+        with col:
+            st.metric(
+                f"{label} (n={int(row['n_clientes'])})",
+                f"{row['rmst_completo']:.1f} meses",
+                help=f"Follow-up disponível: até {row['max_obs_meses']:.0f} meses",
+            )
+
+    st.markdown("**Snapshots de RMST em horizontes fixos**")
+
+    df_show_faixa = df_rmst_faixa_sorted.copy()
+    df_show_faixa["Faixa de Membros"] = df_show_faixa["plano"].map(FAIXA_LABELS).fillna(df_show_faixa["plano"])
+
+    cols_order = ["Faixa de Membros", "n_clientes", "max_obs_meses", "rmst_completo"] + [
+        f"rmst_{t}m" for t in RMST_HORIZONTES_MESES
+    ]
+    df_show_faixa = df_show_faixa[cols_order]
+
+    rename_map = {
+        "n_clientes": "Clientes",
+        "max_obs_meses": "Follow-up (meses)",
+        "rmst_completo": "RMST completo",
+    }
+    rename_map.update({f"rmst_{t}m": f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES})
+    df_show_faixa = df_show_faixa.rename(columns=rename_map)
+
+    df_show_faixa["Follow-up (meses)"] = df_show_faixa["Follow-up (meses)"].apply(lambda v: f"{v:.0f}")
+    for col in ["RMST completo"] + [f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES]:
+        df_show_faixa[col] = df_show_faixa[col].apply(lambda v: f"{v:.1f} meses" if pd.notna(v) else "—")
+
+    st.dataframe(df_show_faixa, use_container_width=True, hide_index=True)
+
+st.divider()
+
+# ── Hazard por tempo de casa, por faixa ────────
+st.subheader("Risco de Churn por Tempo de Casa — por Faixa de Membros")
+st.caption(
+    "Mesma lógica de hazard explicada no expander da seção por Plano acima, "
+    "agora segmentada por faixa de membros — mesmas ressalvas de leitura "
+    "(hazard médio de ciclo completo ≠ 1/RMST; snapshots suavizados por "
+    "janela de ±2 meses)."
+)
+
+hazard_por_faixa = compute_hazard_mensal_por_plano(df, col="faixa_membros")
+
+if not hazard_por_faixa:
+    no_data("Nenhuma faixa de membros com amostra suficiente para calcular hazard por tempo de casa.")
+else:
+    df_hazard_snap_faixa = compute_hazard_snapshots(hazard_por_faixa)
+    df_hazard_snap_faixa["_ordem"] = df_hazard_snap_faixa["plano"].apply(_ordem_faixa)
+    df_hz_sorted_faixa = df_hazard_snap_faixa.sort_values("_ordem")
+
+    st.markdown("**Hazard Médio — Ciclo de Vida Completo (referência)**")
+    cols_global = st.columns(len(df_hz_sorted_faixa))
+    for col, (_, row) in zip(cols_global, df_hz_sorted_faixa.iterrows()):
+        label = FAIXA_LABELS.get(row["plano"], row["plano"])
+        with col:
+            st.metric(
+                label,
+                f"{row['hazard_global_pct']:.1f}%/mês" if pd.notna(row["hazard_global_pct"]) else "—",
+                help=f"n={int(row['hazard_global_n'])} clientes-mês no cálculo" if pd.notna(row["hazard_global_pct"]) else None,
+            )
+
+    st.markdown("**Snapshots — chance de sair no mês seguinte, por tempo de casa já cumprido**")
+
+    df_show_hz_faixa = df_hz_sorted_faixa.copy()
+    df_show_hz_faixa["Faixa de Membros"] = df_show_hz_faixa["plano"].map(FAIXA_LABELS).fillna(df_show_hz_faixa["plano"])
+
+    for t in HAZARD_HORIZONTES_MESES:
+        df_show_hz_faixa[f"Hazard @ {t}m"] = df_show_hz_faixa.apply(
+            lambda r: _fmt_hazard(r[f"hazard_{t}m_pct"], r[f"hazard_{t}m_n"]), axis=1
+        )
+
+    cols_order_hz = ["Faixa de Membros"] + [f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES]
+    st.dataframe(df_show_hz_faixa[cols_order_hz], use_container_width=True, hide_index=True)
+
+    st.markdown("**Curva de hazard mensal — como o risco muda ao longo do tempo de casa**")
+
+    # Mesmo tratamento de teto de eixo Y da seção por Plano: exclui "sem_faixa"
+    # (categoria residual) do cálculo do teto, pra não esmagar a escala.
+    _faixas_escala = {k: v for k, v in hazard_por_faixa.items() if k != "sem_faixa"} or hazard_por_faixa
+    y_max_faixa = max(t["hazard_pct"].max() for t in _faixas_escala.values()) * 1.15
+
+    fig = go.Figure()
+    for faixa, tabela in sorted(hazard_por_faixa.items(), key=lambda kv: _ordem_faixa(kv[0])):
+        label = FAIXA_LABELS.get(faixa, faixa)
+        cor = FAIXA_COLORS.get(faixa, PALETTE[3])
+        fig.add_scatter(
+            x=tabela["mes"], y=tabela["hazard_pct"],
+            name=label, mode="lines+markers",
+            line=dict(color=cor, width=2), marker=dict(size=5),
+            customdata=tabela["at_risk"],
+            hovertemplate=(
+                "%{x} meses<br>Hazard: %{y:.1f}%/mês<br>Em risco: %{customdata}"
+                "<extra>" + label + "</extra>"
+            ),
+        )
+    fig = chart_layout(fig, height=420, legend_bottom=True)
+    fig.update_layout(
+        yaxis=dict(title="Hazard mensal (%)", ticksuffix="%", range=[0, y_max_faixa]),
         xaxis=dict(title="Meses desde a primeira liquidação (t0)", type="linear"),
     )
     st.plotly_chart(fig, use_container_width=True)
