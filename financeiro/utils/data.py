@@ -158,9 +158,19 @@ _PLAN_CASE = """
 # Regra validada em [[planos-depara]] (vault Obsidian) — mesmos 8 buckets usados
 # na tabela de preços vigente. É a faixa contratada no Superlógica, não a
 # contagem real de pessoas cuidadas (podem divergir, ver nota no vault).
+#
+# ⚠️ "1 - 100"/"1 a 100" usam REGEXP_CONTAINS com fronteira de não-dígito, não
+# LIKE '%...%' simples: a string "1 - 100" aparece como SUBSTRING dentro de
+# "601 - 1000" e "5001 - 10000" (60[1 - 100]0 / 500[1 - 100]00) — como CASE
+# avalia em ordem e "ate_100" é o primeiro WHEN, isso jogava TODAS as linhas
+# de 601-1.000 e boa parte das de 5.001-10.000 em ate_100 (bug real,
+# confirmado contra o BQ: 6.128 linhas afetadas, achado pelo usuário
+# 2026-09-29). RE2 (regex do BigQuery) não suporta lookbehind, por isso a
+# fronteira usa grupos consumíveis (^|[^0-9]) / ([^0-9]|$) em vez de (?<!\d).
 _FAIXA_MEMBROS_CASE = """
     CASE
-      WHEN {col} LIKE '%1 - 100%' OR {col} LIKE '%1 a 100%'
+      WHEN REGEXP_CONTAINS({col}, r'(^|[^0-9])1 - 100([^0-9]|$)')
+        OR REGEXP_CONTAINS({col}, r'(^|[^0-9])1 a 100([^0-9]|$)')
         OR {col} LIKE '%0 - 100%' OR {col} LIKE '%0 - 1000%'  THEN 'ate_100'
       WHEN {col} LIKE '%101 - 300%'     THEN '101_300'
       WHEN {col} LIKE '%301 - 600%'     THEN '301_600'
