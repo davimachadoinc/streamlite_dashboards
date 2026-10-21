@@ -17,7 +17,7 @@ st.session_state["_page_key"] = "transacoes"
 
 from utils.style import inject_css
 from utils.data import (
-    br_table,
+    br_style,
     fmt_brl, fmt_num, fmt_int,
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
@@ -543,7 +543,7 @@ with st.expander("📋 Tabela Detalhada por Mês e Método"):
         .reset_index()
         .rename(columns={"mes_fmt": "Mês"})
     )
-    st.dataframe(br_table(df_table_val, skip=("Mês",)), use_container_width=True, hide_index=True)
+    st.dataframe(br_style(df_table_val, skip=("Mês",)), use_container_width=True, hide_index=True)
 
     st.markdown("**Quantidade de transações por método**")
     df_table_qtd = (
@@ -555,4 +555,6 @@ with st.expander("📋 Tabela Detalhada por Mês e Método"):
         .reset_index()
         .rename(columns={"mes_fmt": "Mês"})
     )
-    st.dataframe(br_table(df_table_qtd.astype({c: "float" for c in df_table_qtd.columns if c != "Mês"}), skip=("Mês",), decimals=0), use_container_width=True, hide_index=True)
+    st.dataframe(br_style(df_table_qtd.astype({c: "float" for c in df_table_qtd.columns if c != "Mês"}),
+                          {c: "int" for c in df_table_qtd.columns if c != "Mês"}),
+                 use_container_width=True, hide_index=True)

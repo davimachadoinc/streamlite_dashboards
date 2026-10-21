@@ -20,6 +20,7 @@ st.session_state["_page_key"] = "lifetime"
 
 from utils.style import inject_css
 from utils.data import (
+    br_style,
     fmt_num, fmt_int,
     PALETTE, PLAN_LABELS, PLAN_COLORS,
     FAIXA_ORDER, FAIXA_LABELS, FAIXA_COLORS,
@@ -211,11 +212,9 @@ else:
     rename_map.update({f"rmst_{t}m": f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES})
     df_show = df_show.rename(columns=rename_map)
 
-    df_show["Follow-up (meses)"] = df_show["Follow-up (meses)"].apply(lambda v: f"{fmt_num(v, 0)}")
-    for col in ["RMST completo"] + [f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES]:
-        df_show[col] = df_show[col].apply(lambda v: f"{fmt_num(v, 1)} meses" if pd.notna(v) else "—")
-
-    st.dataframe(df_show, use_container_width=True, hide_index=True)
+    _fmt_rmst = {"Clientes": "int", "Follow-up (meses)": "int", "RMST completo": "meses",
+                 **{f"RMST @ {t}m": "meses" for t in RMST_HORIZONTES_MESES}}
+    st.dataframe(br_style(df_show, _fmt_rmst), use_container_width=True, hide_index=True)
 
 with st.expander("ℹ️ Como ler esta página"):
     st.markdown(
@@ -321,12 +320,13 @@ else:
         return f"{fmt_num(pct, 1)}%/mês (n={int(n)})" if pd.notna(pct) else "—"
 
     for t in HAZARD_HORIZONTES_MESES:
-        df_show_hz[f"Hazard @ {t}m"] = df_show_hz.apply(
-            lambda r: _fmt_hazard(r[f"hazard_{t}m_pct"], r[f"hazard_{t}m_n"]), axis=1
-        )
+        df_show_hz[f"Hazard @ {t}m"] = df_show_hz[f"hazard_{t}m_pct"]
+        df_show_hz[f"n @ {t}m"] = df_show_hz[f"hazard_{t}m_n"]
 
-    cols_order_hz = ["Plano"] + [f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES]
-    st.dataframe(df_show_hz[cols_order_hz], use_container_width=True, hide_index=True)
+    cols_order_hz = ["Plano"] + [c for t in HAZARD_HORIZONTES_MESES for c in (f"Hazard @ {t}m", f"n @ {t}m")]
+    _fmt_hz = {**{f"Hazard @ {t}m": "pct_mes" for t in HAZARD_HORIZONTES_MESES},
+               **{f"n @ {t}m": "int" for t in HAZARD_HORIZONTES_MESES}}
+    st.dataframe(br_style(df_show_hz[cols_order_hz], _fmt_hz), use_container_width=True, hide_index=True)
     st.caption(
         "\"(n=...)\" é a soma de clientes em risco nos meses usados naquele snapshot — "
         "não confunda com o RMST completo (tempo médio de vida) mostrado mais acima: "
@@ -478,11 +478,9 @@ else:
     rename_map.update({f"rmst_{t}m": f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES})
     df_show_faixa = df_show_faixa.rename(columns=rename_map)
 
-    df_show_faixa["Follow-up (meses)"] = df_show_faixa["Follow-up (meses)"].apply(lambda v: f"{fmt_num(v, 0)}")
-    for col in ["RMST completo"] + [f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES]:
-        df_show_faixa[col] = df_show_faixa[col].apply(lambda v: f"{fmt_num(v, 1)} meses" if pd.notna(v) else "—")
-
-    st.dataframe(df_show_faixa, use_container_width=True, hide_index=True)
+    _fmt_rmst = {"Clientes": "int", "Follow-up (meses)": "int", "RMST completo": "meses",
+                 **{f"RMST @ {t}m": "meses" for t in RMST_HORIZONTES_MESES}}
+    st.dataframe(br_style(df_show_faixa, _fmt_rmst), use_container_width=True, hide_index=True)
 
 st.divider()
 
@@ -521,12 +519,13 @@ else:
     df_show_hz_faixa["Faixa de Membros"] = df_show_hz_faixa["plano"].map(FAIXA_LABELS).fillna(df_show_hz_faixa["plano"])
 
     for t in HAZARD_HORIZONTES_MESES:
-        df_show_hz_faixa[f"Hazard @ {t}m"] = df_show_hz_faixa.apply(
-            lambda r: _fmt_hazard(r[f"hazard_{t}m_pct"], r[f"hazard_{t}m_n"]), axis=1
-        )
+        df_show_hz_faixa[f"Hazard @ {t}m"] = df_show_hz_faixa[f"hazard_{t}m_pct"]
+        df_show_hz_faixa[f"n @ {t}m"] = df_show_hz_faixa[f"hazard_{t}m_n"]
 
-    cols_order_hz = ["Faixa de Membros"] + [f"Hazard @ {t}m" for t in HAZARD_HORIZONTES_MESES]
-    st.dataframe(df_show_hz_faixa[cols_order_hz], use_container_width=True, hide_index=True)
+    cols_order_hz = ["Faixa de Membros"] + [c for t in HAZARD_HORIZONTES_MESES for c in (f"Hazard @ {t}m", f"n @ {t}m")]
+    _fmt_hz = {**{f"Hazard @ {t}m": "pct_mes" for t in HAZARD_HORIZONTES_MESES},
+               **{f"n @ {t}m": "int" for t in HAZARD_HORIZONTES_MESES}}
+    st.dataframe(br_style(df_show_hz_faixa[cols_order_hz], _fmt_hz), use_container_width=True, hide_index=True)
 
     st.markdown("**Curva de hazard mensal — como o risco muda ao longo do tempo de casa**")
 

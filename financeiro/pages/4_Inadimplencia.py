@@ -25,6 +25,7 @@ st.session_state["_page_key"] = "inadimplencia"
 
 from utils.style import inject_css
 from utils.data import (
+    br_style,
     fmt_num, fmt_int,
     PALETTE, PLAN_LABELS, PLAN_COLORS,
     chart_layout, period_selector, filter_months,
@@ -197,7 +198,6 @@ def _render_top_table(df: pd.DataFrame) -> None:
         return
     df_show = df.copy()
     df_show["plano"]        = df_show["plano"].map(PLAN_LABELS).fillna(df_show["plano"])
-    df_show["valor_aberto"] = df_show["valor_aberto"].apply(lambda v: f"R$ {fmt_brl(v)}")
     df_show = df_show.rename(columns={
         "id_cliente":      "ID",
         "nome_cliente":    "Cliente",
@@ -206,7 +206,10 @@ def _render_top_table(df: pd.DataFrame) -> None:
         "boletos_abertos": "Boletos Abertos",
         "max_dias_atraso": "Máx. Dias Atraso",
     })
-    st.dataframe(df_show, use_container_width=True, hide_index=True)
+    st.dataframe(
+        br_style(df_show, {"ID": "raw", "Valor em Aberto": "brl", "Boletos Abertos": "int", "Máx. Dias Atraso": "int"}),
+        use_container_width=True, hide_index=True,
+    )
 
 with st.expander("📋 Top 30 Clientes — Maior Valor em Aberto (30d)"):
     _render_top_table(df_top30)

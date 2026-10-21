@@ -22,7 +22,7 @@ st.session_state["_page_key"] = "fluxo_caixa"
 
 from utils.style import inject_css
 from plotly.subplots import make_subplots
-from utils.data import PALETTE, chart_layout, fmt_brl, fmt_num, fmt_int, no_data, _bq_query
+from utils.data import PALETTE, br_style, chart_layout, fmt_brl, fmt_num, fmt_int, no_data, _bq_query
 from utils import fluxo_calc as fc
 from utils.superlogica import buscar_despesas_abertas
 
@@ -194,14 +194,11 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ── Tabela diária ─────────────────────────────
 with st.expander("Tabela diária", expanded=False):
-    t = fluxo.copy()
-    t.insert(0, "Dia", [f"{d:%d/%m/%Y} ({DIAS_SEMANA[d.weekday()]})" for d in t.index])
-    t = t.reset_index(drop=True)
-    t = t.drop(columns=["Acumulado"])
-    for c in t.columns[1:]:
-        t[c] = t[c].map(lambda v: brl(v))
-    t = t.rename(columns={"Total": "Entradas", "já agendado": "Entradas já agendadas"})
-    st.dataframe(t, use_container_width=True, hide_index=True)
+    t = fluxo.drop(columns=["Acumulado"]).rename(columns={"Total": "Entradas", "já agendado": "Entradas já agendadas"})
+    t.insert(0, "Dia da semana", [DIAS_SEMANA[d.weekday()] for d in t.index])
+    t = t.reset_index().rename(columns={"dia": "Data"})
+    st.dataframe(br_style(t, {"Data": "data", **{c: "brl" for c in t.columns[2:]}}),
+                 use_container_width=True, hide_index=True)
 
 if tem_desp and not desp["itens"].empty:
     with st.expander("Despesas previstas — por categoria e maiores itens", expanded=False):
@@ -210,15 +207,15 @@ if tem_desp and not desp["itens"].empty:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Por categoria**")
-            st.dataframe(pd.DataFrame({"Categoria": cat.index, "Valor": [brl(v) for v in cat.values]}),
+            st.dataframe(br_style(pd.DataFrame({"Categoria": cat.index, "Valor": cat.values}), {"Valor": "brl"}),
                          use_container_width=True, hide_index=True)
         with c2:
             st.markdown("**Maiores itens**")
             top = it.sort_values("valor", ascending=False).head(15)
-            st.dataframe(pd.DataFrame({
-                "Pagamento": [f"{d:%d/%m}" for d in top["pagto"]], "Fornecedor": top["fornecedor"].values,
-                "Categoria": top["categoria"].values, "Valor": [brl(v) for v in top["valor"]]}),
-                use_container_width=True, hide_index=True)
+            st.dataframe(br_style(pd.DataFrame({
+                "Pagamento": top["pagto"].values, "Fornecedor": top["fornecedor"].values,
+                "Categoria": top["categoria"].values, "Valor": top["valor"].values}),
+                {"Pagamento": "data", "Valor": "brl"}), use_container_width=True, hide_index=True)
 
 st.divider()
 

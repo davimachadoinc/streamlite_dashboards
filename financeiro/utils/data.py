@@ -389,15 +389,34 @@ def fmt_int(value) -> str:
     return fmt_brl(value, 0)
 
 
-def br_table(df: pd.DataFrame, skip: tuple = (), decimals: int = 2) -> pd.DataFrame:
-    """Cópia do DataFrame com as colunas numéricas (exceto `skip`) já formatadas em padrão BR (texto)."""
-    out = df.copy()
-    for c in out.columns:
-        if c in skip or not pd.api.types.is_numeric_dtype(out[c]):
+_FORMATOS_BR = {
+    "brl":     lambda v: f"R$ {fmt_brl(v)}",     # R$ 12.000.420,21
+    "dec":     lambda v: fmt_brl(v, 2),          # 12.000.420,21
+    "dec1":    lambda v: fmt_brl(v, 1),          # 12,5
+    "int":     lambda v: fmt_brl(v, 0),          # 12.000.420
+    "pct1":    lambda v: f"{fmt_brl(v, 1)}%",    # 12,5%
+    "pct_mes": lambda v: f"{fmt_brl(v, 1)}%/mês",
+    "meses":   lambda v: f"{fmt_brl(v, 1)} meses",
+    "raw":     lambda v: str(v),                 # IDs: sem separador de milhar
+    "data":    lambda v: f"{v:%d/%m/%Y}",
+    "dia_mes": lambda v: f"{v:%d/%m}",
+}
+
+
+def br_style(df: pd.DataFrame, fmt: dict | None = None, skip: tuple = (), decimals: int = 2):
+    """Styler para `st.dataframe`: mostra números em padrão BR (12.000.420,21) mas MANTÉM o valor
+    numérico por baixo, então clicar no cabeçalho ordena por valor (não como texto).
+
+    `fmt` mapeia coluna -> nome em _FORMATOS_BR (ou função). Colunas numéricas fora de `fmt`/`skip`
+    são formatadas automaticamente (inteiro sem casas, float com `decimals`).
+    """
+    fmt = dict(fmt or {})
+    for c in df.columns:
+        if c in fmt or c in skip or not pd.api.types.is_numeric_dtype(df[c]):
             continue
-        casas = 0 if pd.api.types.is_integer_dtype(out[c]) else decimals
-        out[c] = out[c].map(lambda v, n=casas: fmt_brl(v, n))
-    return out
+        fmt[c] = "int" if pd.api.types.is_integer_dtype(df[c]) else ("dec" if decimals == 2 else f"dec{decimals}")
+    funcs = {c: (f if callable(f) else _FORMATOS_BR[f]) for c, f in fmt.items() if c in df.columns}
+    return df.style.format(funcs, na_rep="—")
 
 
 def no_data(label: str = "Dados não disponíveis") -> None:

@@ -17,6 +17,7 @@ st.session_state["_page_key"] = "desativacoes"
 
 from utils.style import inject_css
 from utils.data import (
+    br_style,
     fmt_num, fmt_int,
     PALETTE, MODULE_LABELS, MODULE_COLORS, PLAN_LABELS, PLAN_COLORS,
     chart_layout, mes_fmt_ordered, period_selector, filter_months,
@@ -356,5 +357,4 @@ with st.expander("📋 Tabela Detalhada por Cliente"):
                 "mrr_perdido":  "MRR Perdido (R$)",
             })
         )
-        df_show["MRR Perdido (R$)"] = df_show["MRR Perdido (R$)"].map(lambda v: f"R$ {fmt_brl(v)}")
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        st.dataframe(br_style(df_show, {"MRR Perdido (R$)": "brl"}), use_container_width=True, hide_index=True)
