@@ -36,6 +36,7 @@ st.session_state["_page_key"] = "mrr"
 
 from utils.style import inject_css
 from utils.data import (
+    fmt_num,
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data, fmt_brl,
     load_mrr_inicio_mensal, load_fechamentos_mrr_mensal, load_desativacoes_mensais,
@@ -143,7 +144,7 @@ prev_nrr = prev_val(df_fmt, "nrr", "mes")
 with k1:
     st.metric(
         "NRR (último mês)",
-        f"{curr_nrr:.1f}%" if curr_nrr is not None else "—",
+        f"{fmt_num(curr_nrr, 1)}%" if curr_nrr is not None else "—",
         delta=delta_str(curr_nrr, prev_nrr, fmt="+.1f", suffix=" p.p."),
         help="(MRR início + Upsell − Desativações) / MRR início. Exclui Novas Vendas do cálculo.",
     )

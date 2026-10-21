@@ -17,6 +17,8 @@ st.session_state["_page_key"] = "transacoes"
 
 from utils.style import inject_css
 from utils.data import (
+    br_table,
+    fmt_brl, fmt_num, fmt_int,
     PALETTE, chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
     load_transactions_por_metodo, load_transactions_diario, load_transactions_clientes_por_mes,
@@ -162,28 +164,28 @@ curr_val = last_val(df_total, "total_value", "mes")
 prev_val_ = prev_val(df_total, "total_value", "mes")
 with k1:
     st.metric("Volume Total (R$)",
-              f"R$ {curr_val:,.2f}" if curr_val else "—",
+              f"R$ {fmt_brl(curr_val)}" if curr_val else "—",
               delta=delta_str(curr_val, prev_val_, fmt="+,.2f", suffix=" R$"))
 
 curr_qtd = last_val(df_total, "qtd", "mes")
 prev_qtd = prev_val(df_total, "qtd", "mes")
 with k2:
     st.metric("Qtd. de Transações",
-              f"{int(curr_qtd):,}" if curr_qtd else "—",
+              f"{fmt_int(int(curr_qtd))}" if curr_qtd else "—",
               delta=delta_str(curr_qtd, prev_qtd))
 
 ticket    = (curr_val / curr_qtd) if (curr_val and curr_qtd and curr_qtd > 0) else None
 prev_tick = (prev_val_ / prev_qtd) if (prev_val_ and prev_qtd and prev_qtd > 0) else None
 with k3:
     st.metric("Ticket Médio",
-              f"R$ {ticket:,.2f}" if ticket else "—",
+              f"R$ {fmt_brl(ticket)}" if ticket else "—",
               delta=delta_str(ticket, prev_tick, fmt="+,.2f", suffix=" R$"))
 
 curr_cli = last_val(df_cli_mes, "clientes", "mes")
 prev_cli = prev_val(df_cli_mes, "clientes", "mes")
 with k4:
     st.metric("Clientes Transacionando",
-              f"{int(curr_cli):,}" if curr_cli else "—",
+              f"{fmt_int(int(curr_cli))}" if curr_cli else "—",
               delta=delta_str(curr_cli, prev_cli))
 
 with k5:
@@ -455,17 +457,17 @@ else:
     with sn1:
         st.metric(
             "Take Rate",
-            f"{snap_pct:.4f}%" if snap_pct is not None else "—",
+            f"{fmt_num(snap_pct, 4)}%" if snap_pct is not None else "—",
         )
     with sn2:
         st.metric(
             "Intermediação no Período (R$)",
-            f"R$ {snap_int:,.2f}" if snap_int is not None else "—",
+            f"R$ {fmt_brl(snap_int)}" if snap_int is not None else "—",
         )
     with sn3:
         st.metric(
             "TPV no Período (R$)",
-            f"R$ {snap_tpv:,.2f}" if snap_tpv is not None else "—",
+            f"R$ {fmt_brl(snap_tpv)}" if snap_tpv is not None else "—",
         )
 
     st.markdown("")
@@ -541,7 +543,7 @@ with st.expander("📋 Tabela Detalhada por Mês e Método"):
         .reset_index()
         .rename(columns={"mes_fmt": "Mês"})
     )
-    st.dataframe(df_table_val, use_container_width=True, hide_index=True)
+    st.dataframe(br_table(df_table_val, skip=("Mês",)), use_container_width=True, hide_index=True)
 
     st.markdown("**Quantidade de transações por método**")
     df_table_qtd = (
@@ -553,4 +555,4 @@ with st.expander("📋 Tabela Detalhada por Mês e Método"):
         .reset_index()
         .rename(columns={"mes_fmt": "Mês"})
     )
-    st.dataframe(df_table_qtd, use_container_width=True, hide_index=True)
+    st.dataframe(br_table(df_table_qtd.astype({c: "float" for c in df_table_qtd.columns if c != "Mês"}), skip=("Mês",), decimals=0), use_container_width=True, hide_index=True)

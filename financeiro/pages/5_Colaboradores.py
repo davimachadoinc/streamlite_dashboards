@@ -35,6 +35,7 @@ st.session_state["_page_key"] = "colaboradores"
 
 from utils.style import inject_css
 from utils.data import (
+    fmt_int,
     PALETTE, COLAB_LABELS, COLAB_ORDER, COLAB_COLORS, CATEG_COLORS,
     chart_layout, mes_fmt_ordered,
     last_val, prev_val, delta_str, no_data, fmt_brl,
@@ -86,7 +87,7 @@ for col, bucket in zip([k1, k2, k3], COLAB_ORDER):
     with col:
         st.metric(
             COLAB_LABELS[bucket],
-            f"{int(curr):,}".replace(",", ".") if curr is not None else "—",
+            f"{fmt_int(int(curr))}" if curr is not None else "—",
             delta=delta_str(curr, prev),
         )
 
@@ -95,7 +96,7 @@ prev_total = prev_val(df_total_mes, "colaboradores", "mes")
 with k4:
     st.metric(
         "Total",
-        f"{int(curr_total):,}".replace(",", ".") if curr_total is not None else "—",
+        f"{fmt_int(int(curr_total))}" if curr_total is not None else "—",
         delta=delta_str(curr_total, prev_total),
     )
 

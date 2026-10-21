@@ -285,8 +285,9 @@ def chart_layout(fig: go.Figure, height: int = 380, legend_bottom: bool = False)
         ),
         yaxis=dict(
             showgrid=True, gridcolor="#292929", gridwidth=1,
-            zeroline=False, title="",
+            zeroline=False, title="", tickformat=",.2~f",
         ),
+        separators=",.",   # padrão BR: vírgula = decimal, ponto = milhar (ticks, hover e rótulos)
         hoverlabel=dict(
             bgcolor="#141414", bordercolor="#292929",
             font_size=13, font_family="Outfit, sans-serif", font_color="#ffffff",
@@ -352,20 +353,51 @@ def prev_val(df: pd.DataFrame, col: str, date_col: str = "mes"):
     return ordered[col].iloc[-2] if len(ordered) >= 2 else None
 
 
+def _br(txt: str) -> str:
+    """Troca separadores do padrão americano (1,234.56) para o brasileiro (1.234,56)."""
+    return txt.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+def _vazio(value) -> bool:
+    return value is None or (isinstance(value, float) and value != value)
+
+
 def delta_str(curr, prev, fmt: str = "+,.0f", suffix: str = "") -> str | None:
     if curr is None or prev is None:
         return None
     diff = curr - prev
     try:
-        return f"{diff:{fmt}}{suffix}"
+        return _br(f"{diff:{fmt}}") + suffix
     except Exception:
-        return f"{diff:+.2f}{suffix}"
+        return _br(f"{diff:+,.2f}") + suffix
 
 
 def fmt_brl(value, decimals: int = 2) -> str:
-    """Formata número no padrão brasileiro: 1.000,00"""
-    s = f"{value:,.{decimals}f}"
-    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+    """Formata número no padrão brasileiro: 12.000.420,21 (milhar = ponto, centavos = vírgula)."""
+    if _vazio(value):
+        return "—"
+    return _br(f"{value:,.{decimals}f}")
+
+
+def fmt_num(value, decimals: int = 1) -> str:
+    """Número com casas decimais no padrão brasileiro (ex.: 12,5 ou 1.234,56)."""
+    return fmt_brl(value, decimals)
+
+
+def fmt_int(value) -> str:
+    """Inteiro com ponto de milhar (ex.: 1.234)."""
+    return fmt_brl(value, 0)
+
+
+def br_table(df: pd.DataFrame, skip: tuple = (), decimals: int = 2) -> pd.DataFrame:
+    """Cópia do DataFrame com as colunas numéricas (exceto `skip`) já formatadas em padrão BR (texto)."""
+    out = df.copy()
+    for c in out.columns:
+        if c in skip or not pd.api.types.is_numeric_dtype(out[c]):
+            continue
+        casas = 0 if pd.api.types.is_integer_dtype(out[c]) else decimals
+        out[c] = out[c].map(lambda v, n=casas: fmt_brl(v, n))
+    return out
 
 
 def no_data(label: str = "Dados não disponíveis") -> None:

@@ -20,6 +20,7 @@ st.session_state["_page_key"] = "lifetime"
 
 from utils.style import inject_css
 from utils.data import (
+    fmt_num, fmt_int,
     PALETTE, PLAN_LABELS, PLAN_COLORS,
     FAIXA_ORDER, FAIXA_LABELS, FAIXA_COLORS,
     chart_layout, no_data,
@@ -90,12 +91,12 @@ st.subheader("Visão Geral")
 
 k1, k2, k3 = st.columns(3)
 with k1:
-    st.metric("Clientes na análise", f"{len(df):,}".replace(",", "."))
+    st.metric("Clientes na análise", f"{fmt_int(len(df))}")
 with k2:
     pct_perdidos = df["evento"].mean() * 100
-    st.metric("% já perdidos", f"{pct_perdidos:.1f}%")
+    st.metric("% já perdidos", f"{fmt_num(pct_perdidos, 1)}%")
 with k3:
-    st.metric("% ainda ativos (censurados)", f"{(100 - pct_perdidos):.1f}%")
+    st.metric("% ainda ativos (censurados)", f"{fmt_num((100 - pct_perdidos), 1)}%")
 
 rmst_geral = compute_rmst_snapshots(df.assign(plano="Todos os clientes"), n_min=1)
 
@@ -106,13 +107,13 @@ if not rmst_geral.empty:
     with cols[0]:
         st.metric(
             "Tempo médio (RMST completo)",
-            f"{row['rmst_completo']:.1f} meses",
-            help=f"Follow-up disponível: até {row['max_obs_meses']:.0f} meses",
+            f"{fmt_num(row['rmst_completo'], 1)} meses",
+            help=f"Follow-up disponível: até {fmt_num(row['max_obs_meses'], 0)} meses",
         )
     for col, tau in zip(cols[1:], RMST_HORIZONTES_MESES):
         val = row.get(f"rmst_{tau}m")
         with col:
-            st.metric(f"RMST @ {tau} meses", f"{val:.1f} meses" if val is not None else "—")
+            st.metric(f"RMST @ {tau} meses", f"{fmt_num(val, 1)} meses" if val is not None else "—")
 
 st.divider()
 
@@ -182,8 +183,8 @@ else:
         with col:
             st.metric(
                 f"{label} (n={int(row['n_clientes'])})",
-                f"{row['rmst_completo']:.1f} meses",
-                help=f"Follow-up disponível: até {row['max_obs_meses']:.0f} meses",
+                f"{fmt_num(row['rmst_completo'], 1)} meses",
+                help=f"Follow-up disponível: até {fmt_num(row['max_obs_meses'], 0)} meses",
             )
 
     st.markdown("**Snapshots de RMST em horizontes fixos**")
@@ -210,9 +211,9 @@ else:
     rename_map.update({f"rmst_{t}m": f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES})
     df_show = df_show.rename(columns=rename_map)
 
-    df_show["Follow-up (meses)"] = df_show["Follow-up (meses)"].apply(lambda v: f"{v:.0f}")
+    df_show["Follow-up (meses)"] = df_show["Follow-up (meses)"].apply(lambda v: f"{fmt_num(v, 0)}")
     for col in ["RMST completo"] + [f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES]:
-        df_show[col] = df_show[col].apply(lambda v: f"{v:.1f} meses" if pd.notna(v) else "—")
+        df_show[col] = df_show[col].apply(lambda v: f"{fmt_num(v, 1)} meses" if pd.notna(v) else "—")
 
     st.dataframe(df_show, use_container_width=True, hide_index=True)
 
@@ -301,7 +302,7 @@ else:
         with col:
             st.metric(
                 label,
-                f"{row['hazard_global_pct']:.1f}%/mês" if pd.notna(row["hazard_global_pct"]) else "—",
+                f"{fmt_num(row['hazard_global_pct'], 1)}%/mês" if pd.notna(row["hazard_global_pct"]) else "—",
                 help=f"n={int(row['hazard_global_n'])} clientes-mês no cálculo" if pd.notna(row["hazard_global_pct"]) else None,
             )
 
@@ -317,7 +318,7 @@ else:
     df_show_hz["Plano"] = df_show_hz["plano"].map(PLAN_LABELS).fillna(df_show_hz["plano"])
 
     def _fmt_hazard(pct, n):
-        return f"{pct:.1f}%/mês (n={int(n)})" if pd.notna(pct) else "—"
+        return f"{fmt_num(pct, 1)}%/mês (n={int(n)})" if pd.notna(pct) else "—"
 
     for t in HAZARD_HORIZONTES_MESES:
         df_show_hz[f"Hazard @ {t}m"] = df_show_hz.apply(
@@ -455,8 +456,8 @@ else:
         with col:
             st.metric(
                 f"{label} (n={int(row['n_clientes'])})",
-                f"{row['rmst_completo']:.1f} meses",
-                help=f"Follow-up disponível: até {row['max_obs_meses']:.0f} meses",
+                f"{fmt_num(row['rmst_completo'], 1)} meses",
+                help=f"Follow-up disponível: até {fmt_num(row['max_obs_meses'], 0)} meses",
             )
 
     st.markdown("**Snapshots de RMST em horizontes fixos**")
@@ -477,9 +478,9 @@ else:
     rename_map.update({f"rmst_{t}m": f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES})
     df_show_faixa = df_show_faixa.rename(columns=rename_map)
 
-    df_show_faixa["Follow-up (meses)"] = df_show_faixa["Follow-up (meses)"].apply(lambda v: f"{v:.0f}")
+    df_show_faixa["Follow-up (meses)"] = df_show_faixa["Follow-up (meses)"].apply(lambda v: f"{fmt_num(v, 0)}")
     for col in ["RMST completo"] + [f"RMST @ {t}m" for t in RMST_HORIZONTES_MESES]:
-        df_show_faixa[col] = df_show_faixa[col].apply(lambda v: f"{v:.1f} meses" if pd.notna(v) else "—")
+        df_show_faixa[col] = df_show_faixa[col].apply(lambda v: f"{fmt_num(v, 1)} meses" if pd.notna(v) else "—")
 
     st.dataframe(df_show_faixa, use_container_width=True, hide_index=True)
 
@@ -510,7 +511,7 @@ else:
         with col:
             st.metric(
                 label,
-                f"{row['hazard_global_pct']:.1f}%/mês" if pd.notna(row["hazard_global_pct"]) else "—",
+                f"{fmt_num(row['hazard_global_pct'], 1)}%/mês" if pd.notna(row["hazard_global_pct"]) else "—",
                 help=f"n={int(row['hazard_global_n'])} clientes-mês no cálculo" if pd.notna(row["hazard_global_pct"]) else None,
             )
 

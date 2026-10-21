@@ -17,6 +17,7 @@ st.session_state["_page_key"] = "receita"
 
 from utils.style import inject_css
 from utils.data import (
+    fmt_int,
     PALETTE, MODULE_LABELS, MODULE_COLORS, PLAN_LABELS, PLAN_COLORS,
     chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data,
@@ -65,7 +66,7 @@ k1, k2, k3, k4 = st.columns(4)
 curr_cli  = last_val(df_contratos, "clientes_com_boleto", "mes")
 prev_cli  = prev_val(df_contratos, "clientes_com_boleto", "mes")
 with k1:
-    st.metric("Clientes com Boleto", f"{int(curr_cli):,}" if curr_cli else "—",
+    st.metric("Clientes com Boleto", f"{fmt_int(int(curr_cli))}" if curr_cli else "—",
               delta=delta_str(curr_cli, prev_cli))
 
 for col_widget, modulo in zip([k2, k3, k4], ["kids", "jornada", "loja_inteligente"]):
@@ -74,7 +75,7 @@ for col_widget, modulo in zip([k2, k3, k4], ["kids", "jornada", "loja_inteligent
     prev = prev_val(df_m, "clientes", "mes")
     with col_widget:
         st.metric(f"Clientes · {MODULE_LABELS[modulo]}",
-                  f"{int(curr):,}" if curr else "—",
+                  f"{fmt_int(int(curr))}" if curr else "—",
                   delta=delta_str(curr, prev))
 
 st.divider()
@@ -92,7 +93,7 @@ else:
         x=df_plot["mes_fmt"],
         y=df_plot["clientes_com_boleto"],
         marker_color=PALETTE[0],
-        text=df_plot["clientes_com_boleto"].apply(lambda v: f"{int(v):,}"),
+        text=df_plot["clientes_com_boleto"].apply(lambda v: f"{fmt_int(int(v))}"),
         textposition="outside",
         textfont=dict(size=11, color="#a0a0a0"),
     )

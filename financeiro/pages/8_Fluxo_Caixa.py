@@ -21,7 +21,8 @@ if not st.user.is_logged_in:
 st.session_state["_page_key"] = "fluxo_caixa"
 
 from utils.style import inject_css
-from utils.data import PALETTE, chart_layout, fmt_brl, no_data, _bq_query
+from plotly.subplots import make_subplots
+from utils.data import PALETTE, chart_layout, fmt_brl, fmt_num, fmt_int, no_data, _bq_query
 from utils import fluxo_calc as fc
 from utils.superlogica import buscar_despesas_abertas
 
@@ -48,7 +49,22 @@ def load_despesas_fluxo(_app_token: str, _access_token: str, dia: str) -> pd.Dat
 
 
 def brl(v: float) -> str:
-    return f"R$ {fmt_brl(v, 0)}"
+    """R$ 12.000.420,21 — milhar com ponto, centavos com vírgula."""
+    return f"R$ {fmt_brl(v)}"
+
+
+def parse_brl(txt: str) -> float | None:
+    """Lê '12.000.420,21' (padrão BR). Ponto = milhar, vírgula = centavos. None se inválido."""
+    t = (txt or "").strip().replace("R$", "").replace(" ", "")
+    if not t:
+        return 0.0
+    neg = t.startswith("-") or (t.startswith("(") and t.endswith(")"))
+    t = t.strip("-()").replace(".", "").replace(",", ".")
+    try:
+        v = float(t)
+    except ValueError:
+        return None
+    return -v if neg else v
 
 
 # ── Header ────────────────────────────────────
@@ -98,17 +114,23 @@ if fluxo.empty:
     st.stop()
 
 # ── Saldo inicial (preenchido por você) ──────
-if "fluxo_saldo_inicial" in st.session_state:        # mantém o valor ao trocar de página
-    st.session_state["fluxo_saldo_inicial"] = st.session_state["fluxo_saldo_inicial"]
+if "fluxo_saldo_txt" in st.session_state:            # mantém o valor ao trocar de página
+    st.session_state["fluxo_saldo_txt"] = st.session_state["fluxo_saldo_txt"]
 with st.container(border=True):
     cs1, cs2 = st.columns([2, 5], vertical_alignment="center")
     with cs1:
-        saldo_inicial = st.number_input("Saldo inicial de caixa (R$)", value=0.0, step=10000.0, format="%.2f",
-                                        key="fluxo_saldo_inicial")
+        saldo_txt = st.text_input("Saldo inicial de caixa (R$)", value="0,00", key="fluxo_saldo_txt",
+                                  help="Digite no padrão brasileiro, ex.: 1.250.000,00 (ponto = milhar, vírgula = centavos). "
+                                       "Confirme com Enter.")
+    saldo_lido = parse_brl(saldo_txt)
+    saldo_inicial = saldo_lido if saldo_lido is not None else 0.0
     with cs2:
-        st.caption(
-            f"Saldo em conta no início de hoje ({hoje:%d/%m}), antes das movimentações de hoje. A linha "
-            "**Saldo projetado** parte dele: saldo + entradas − saídas, dia a dia. Com 0, mostra só o resultado acumulado.")
+        if saldo_lido is None:
+            st.error("Valor inválido. Use o formato 1.250.000,00")
+        else:
+            st.caption(
+                f"Lido como **{brl(saldo_inicial)}** — saldo em conta no início de hoje ({hoje:%d/%m}), antes das "
+                "movimentações de hoje. O **Saldo projetado** parte dele: saldo + entradas − saídas, dia a dia.")
 fluxo["Saldo projetado"] = saldo_inicial + fluxo["Resultado do dia"].cumsum()
 
 # ── KPIs ──────────────────────────────────────
@@ -121,12 +143,12 @@ k2.metric("Saídas previstas", brl(fluxo["Saídas"].sum()) if tem_desp else "—
 k3.metric("Resultado do período", brl(fluxo["Resultado do dia"].sum()) if tem_desp else "—")
 k4.metric("Saldo final projetado", brl(fluxo["Saldo projetado"].iloc[-1]) if tem_desp else "—",
           help="Saldo inicial informado + entradas − saídas.")
+k5.metric("Entradas já agendadas (certas)", brl(fluxo["já agendado"].sum()),
+          help="Clientes que já pagaram e cujo crédito está agendado em dt_recebimento_recb.")
 if tem_desp:
     dia_min = fluxo["Saldo projetado"].idxmin()
     st.caption(f"Menor saldo projetado no período: {brl(fluxo['Saldo projetado'].min())} em {dia_min:%d/%m}"
                + (" — **caixa negativo**." if fluxo["Saldo projetado"].min() < 0 else "."))
-k5.metric("Entradas já agendadas (certas)", brl(fluxo["já agendado"].sum()),
-          help="Clientes que já pagaram e cujo crédito está agendado em dt_recebimento_recb.")
 st.caption(
     f"Entradas: Mensalidade {brl(fluxo['Mensalidade'].sum())} · Setup {brl(fluxo['Setup'].sum())} · "
     f"Meios de pagamento {brl(fluxo['Meios de pagamento'].sum())}"
@@ -148,26 +170,27 @@ st.divider()
 # ── Gráfico diário ────────────────────────────
 st.subheader("Caixa diário previsto")
 x = [f"{d:%d/%m} {DIAS_SEMANA[d.weekday()]}" for d in fluxo.index]
-fig = go.Figure()
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07, row_heights=[0.6, 0.4],
+                    subplot_titles=("Entradas e saídas do dia", "Saldo projetado" if tem_desp else "Entradas acumuladas"))
 for nome in ("Mensalidade", "Setup", "Meios de pagamento"):
-    fig.add_bar(x=x, y=fluxo[nome], name=nome, marker_color=COR[nome],
-                hovertemplate="%{x}<br>" + nome + ": R$ %{y:,.0f}<extra></extra>")
+    fig.add_bar(x=x, y=fluxo[nome], name=nome, marker_color=COR[nome], row=1, col=1,
+                hovertemplate="%{x}<br>" + nome + ": R$ %{y:,.2f}<extra></extra>")
 if tem_desp:
-    fig.add_bar(x=x, y=-fluxo["Saídas"], name="Saídas", marker_color=COR["Saídas"],
-                customdata=fluxo["Saídas"],
-                hovertemplate="%{x}<br>Saídas: R$ %{customdata:,.0f}<extra></extra>")
+    fig.add_bar(x=x, y=-fluxo["Saídas"], name="Saídas", marker_color=COR["Saídas"], row=1, col=1,
+                customdata=fluxo["Saídas"], hovertemplate="%{x}<br>Saídas: R$ %{customdata:,.2f}<extra></extra>")
     linha_y, linha_nome = fluxo["Saldo projetado"], "Saldo projetado"
 else:
     linha_y, linha_nome = fluxo["Total"].cumsum(), "Entradas acumuladas"
-fig.add_scatter(x=x, y=linha_y, name=linha_nome, mode="lines+markers", yaxis="y2",
-                line=dict(color=PALETTE[1], width=2), marker=dict(size=5),
-                hovertemplate="%{x}<br>" + linha_nome + ": R$ %{y:,.0f}<extra></extra>")
-fig.update_layout(
-    barmode="relative",
-    yaxis=dict(tickprefix="R$ ", tickformat=",.0f"),
-    yaxis2=dict(overlaying="y", side="right", showgrid=False, tickprefix="R$ ", tickformat=",.0f"),
-)
-st.plotly_chart(chart_layout(fig, height=440, legend_bottom=True), use_container_width=True)
+fig.add_scatter(x=x, y=linha_y, name=linha_nome, mode="lines+markers", row=2, col=1,
+                line=dict(color=PALETTE[1], width=2),
+                marker=dict(size=7, color=[COR["Saídas"] if v < 0 else PALETTE[0] for v in linha_y]),
+                hovertemplate="%{x}<br>" + linha_nome + ": R$ %{y:,.2f}<extra></extra>")
+fig.add_hline(y=0, row=2, col=1, line=dict(color=PALETTE[3], width=1, dash="dot"))
+chart_layout(fig, height=620, legend_bottom=True)
+fig.update_layout(barmode="relative")
+fig.update_xaxes(type="category", showgrid=False)
+fig.update_yaxes(tickprefix="R$ ", tickformat=",.2~f", showgrid=True, gridcolor="#292929", zeroline=False)
+st.plotly_chart(fig, use_container_width=True)
 
 # ── Tabela diária ─────────────────────────────
 with st.expander("Tabela diária", expanded=False):
@@ -213,18 +236,18 @@ def caixa_regra(conta: str) -> None:
     nome = fc.CONTAS[conta]
     r = fc.resumo_curva(c)
     with st.container(border=True):
-        st.markdown(f"**{nome}** — base de R$ {fmt_brl(c['base'], 0)} · {c['n_boletos']:,} boletos · "
-                    f"vencimentos de {c['ini']:%d/%m/%Y} a {c['fim']:%d/%m/%Y}".replace(",", "."))
+        st.markdown(f"**{nome}** — base de R$ {fmt_brl(c['base'])} · {fmt_int(c['n_boletos'])} boletos · "
+                    f"vencimentos de {c['ini']:%d/%m/%Y} a {c['fim']:%d/%m/%Y}")
         linhas = [r.iloc[i:i + 7] for i in (0, 7)]
         for bloco in linhas:
             cols = st.columns(len(bloco))
             for col, (_, row) in zip(cols, bloco.iterrows()):
-                col.metric(row["faixa"], f"{row['pct'] * 100:.1f}%".replace(".", ","))
+                col.metric(row["faixa"], f"{fmt_num(row['pct'] * 100, 1)}%")
         resto = r.iloc[14:]
         if len(resto):
             cols = st.columns(len(resto))
             for col, (_, row) in zip(cols, resto.iterrows()):
-                col.metric(row["faixa"], f"{row['pct'] * 100:.1f}%".replace(".", ","))
+                col.metric(row["faixa"], f"{fmt_num(row['pct'] * 100, 1)}%")
         lags = c["lags"]
         sel = (lags >= -8) & (lags <= 14)
         f2 = go.Figure(go.Bar(

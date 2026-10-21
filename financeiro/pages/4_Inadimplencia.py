@@ -25,6 +25,7 @@ st.session_state["_page_key"] = "inadimplencia"
 
 from utils.style import inject_css
 from utils.data import (
+    fmt_num, fmt_int,
     PALETTE, PLAN_LABELS, PLAN_COLORS,
     chart_layout, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data, fmt_brl,
@@ -75,7 +76,7 @@ prev_30 = prev_val(df_serie, "pct_inadimp_30d", "dia")
 with k1:
     st.metric(
         "Inadimplência 30d (último dia)",
-        f"{curr_30:.1f}%" if curr_30 is not None else "—",
+        f"{fmt_num(curr_30, 1)}%" if curr_30 is not None else "—",
         delta=delta_str(curr_30, prev_30, fmt="+.1f", suffix=" p.p."),
         delta_color="inverse",
     )
@@ -89,7 +90,7 @@ prev_90 = prev_val(df_serie, "pct_inadimp_90d", "dia")
 with k3:
     st.metric(
         "Inadimplência 90d (último dia)",
-        f"{curr_90:.1f}%" if curr_90 is not None else "—",
+        f"{fmt_num(curr_90, 1)}%" if curr_90 is not None else "—",
         delta=delta_str(curr_90, prev_90, fmt="+.1f", suffix=" p.p."),
         delta_color="inverse",
     )
@@ -180,7 +181,7 @@ with col_b:
         fig.add_bar(
             x=df_p2["label"], y=df_p2["clientes_inadimplentes"],
             marker_color=df_p2["cor"].tolist(),
-            text=df_p2["clientes_inadimplentes"].apply(lambda v: f"{int(v):,}".replace(",", ".")),
+            text=df_p2["clientes_inadimplentes"].apply(lambda v: f"{fmt_int(int(v))}"),
             textposition="outside",
             textfont=dict(size=11, color="#a0a0a0"),
         )

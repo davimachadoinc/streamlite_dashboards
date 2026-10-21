@@ -17,6 +17,7 @@ st.session_state["_page_key"] = "desativacoes"
 
 from utils.style import inject_css
 from utils.data import (
+    fmt_num, fmt_int,
     PALETTE, MODULE_LABELS, MODULE_COLORS, PLAN_LABELS, PLAN_COLORS,
     chart_layout, mes_fmt_ordered, period_selector, filter_months,
     last_val, prev_val, delta_str, no_data, fmt_brl,
@@ -88,7 +89,7 @@ prev_tot = prev_val(df_tot, "clientes_desativados", "mes")
 with k3:
     st.metric(
         "Desativações Totais (último mês)",
-        f"{int(curr_tot):,}".replace(",", ".") if curr_tot else "—",
+        f"{fmt_int(int(curr_tot))}" if curr_tot else "—",
         delta=delta_str(curr_tot, prev_tot),
         help="Cliente sem nenhum produto de mensalidade ativo restante.",
     )
@@ -98,14 +99,14 @@ prev_par = prev_val(df_par, "clientes_desativados", "mes")
 with k4:
     st.metric(
         "Desativações Parciais (último mês)",
-        f"{int(curr_par):,}".replace(",", ".") if curr_par else "—",
+        f"{fmt_int(int(curr_par))}" if curr_par else "—",
         delta=delta_str(curr_par, prev_par),
         help="Cliente desativou ao menos 1 produto, mas ainda tem outro(s) ativo(s).",
     )
 
 cli_total_periodo = int(df_raw["clientes_desativados"].sum())
 with k5:
-    st.metric("Clientes Desativados (período)", f"{cli_total_periodo:,}".replace(",", "."))
+    st.metric("Clientes Desativados (período)", f"{fmt_int(cli_total_periodo)}")
 
 st.divider()
 
@@ -327,7 +328,7 @@ if not df_desativ_plano.empty and not df_base_plano.empty:
         if row.empty or row["clientes_ativos"].values[0] == 0:
             churn_val = "—"
         else:
-            churn_val = f"{row['churn_pct'].values[0]:.1f}%"
+            churn_val = f"{fmt_num(row['churn_pct'].values[0], 1)}%"
         with col_kpi:
             st.metric(label, churn_val)
 else:
@@ -355,11 +356,5 @@ with st.expander("📋 Tabela Detalhada por Cliente"):
                 "mrr_perdido":  "MRR Perdido (R$)",
             })
         )
-        st.dataframe(
-            df_show,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "MRR Perdido (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-            },
-        )
+        df_show["MRR Perdido (R$)"] = df_show["MRR Perdido (R$)"].map(lambda v: f"R$ {fmt_brl(v)}")
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
