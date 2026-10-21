@@ -10,7 +10,7 @@ Regra de recebimento (D0 = dia do vencimento, D+n = n dias ÚTEIS depois; D-n = 
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from datetime import date
+from datetime import date, datetime, timedelta
 
 st.set_page_config(page_title="Fluxo de Caixa | InChurch", page_icon="💵", layout="wide")
 
@@ -28,24 +28,66 @@ from utils.superlogica import buscar_despesas_abertas
 
 inject_css()
 
+# Fonte menor nos indicadores desta página (só aqui): no padrão global os números ficavam cortados ("10...")
+# nas caixas estreitas de regra de recebimento e nos cartões com valores em R$ com centavos.
+st.markdown(
+    """
+<style>
+[class*="st-key-regra_"] [data-testid="stMetric"] { padding: 10px 6px !important; min-height: 84px !important; }
+[class*="st-key-regra_"] [data-testid="stMetricLabel"] > div,
+[class*="st-key-regra_"] [data-testid="stMetricLabel"] p {
+  font-size: 0.62rem !important; letter-spacing: 0.02em !important; white-space: normal !important; line-height: 1.15 !important;
+}
+[class*="st-key-regra_"] [data-testid="stMetricValue"],
+[class*="st-key-regra_"] [data-testid="stMetricValue"] * {
+  font-size: clamp(0.72rem, 0.95vw, 1.15rem) !important; white-space: nowrap !important;
+  overflow: visible !important; text-overflow: clip !important;
+}
+.st-key-kpis_fluxo [data-testid="stMetric"] { padding: 14px 14px !important; min-height: 96px !important; }
+.st-key-kpis_fluxo [data-testid="stMetricLabel"] > div,
+.st-key-kpis_fluxo [data-testid="stMetricLabel"] p { font-size: 0.68rem !important; white-space: normal !important; line-height: 1.2 !important; }
+.st-key-kpis_fluxo [data-testid="stMetricValue"],
+.st-key-kpis_fluxo [data-testid="stMetricValue"] * {
+  font-size: clamp(0.85rem, 1.25vw, 1.6rem) !important; white-space: nowrap !important;
+  overflow: visible !important; text-overflow: clip !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 DIAS_SEMANA = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
-COR = {"Mensalidade": PALETTE[0], "Setup": PALETTE[6], "Meios de pagamento": PALETTE[3], "Saídas": "#e5534b"}
+COR = {"Mensalidade": PALETTE[0], "Setup": PALETTE[6], "Meios de pagamento": PALETTE[3], "Saídas": "#e5534b", "Custo de intermediação": "#f0a500"}
 
 
-@st.cache_data(ttl=3600)
-def load_boletos_fluxo() -> pd.DataFrame:
-    return _bq_query(fc.SQL_BOLETOS, "bigquery_bi")
+CACHE_TTL = 72000  # padrão do dashboard: 20 h. O botão "Atualizar agora" limpa o cache sob demanda.
 
 
-@st.cache_data(ttl=3600)
-def load_intermediacao_fluxo() -> pd.DataFrame:
-    return _bq_query(fc.SQL_INTERM, "bigquery_bi")
+def _agora_brasilia() -> datetime:
+    return datetime.utcnow() - timedelta(hours=3)   # Brasília sem horário de verão
 
 
-@st.cache_data(ttl=3600)
-def load_despesas_fluxo(_app_token: str, _access_token: str, dia: str) -> pd.DataFrame:
+@st.cache_data(ttl=CACHE_TTL)
+def load_boletos_fluxo() -> tuple:
+    return _bq_query(fc.SQL_BOLETOS, "bigquery_bi"), _agora_brasilia()
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def load_intermediacao_fluxo() -> tuple:
+    return _bq_query(fc.SQL_INTERM, "bigquery_bi"), _agora_brasilia()
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def load_despesas_fluxo(_app_token: str, _access_token: str, dia: str) -> tuple:
     """`dia` só invalida o cache na virada do dia (os tokens ficam fora da chave de cache)."""
-    return buscar_despesas_abertas(_app_token, _access_token, pd.Timestamp(dia))
+    return buscar_despesas_abertas(_app_token, _access_token, pd.Timestamp(dia)), _agora_brasilia()
+
+
+def atualizar_agora() -> None:
+    """Limpa o cache das 3 fontes; a próxima execução busca tudo de novo (BigQuery + API Superlógica)."""
+    load_boletos_fluxo.clear()
+    load_intermediacao_fluxo.clear()
+    load_despesas_fluxo.clear()
 
 
 def brl(v: float) -> str:
@@ -76,14 +118,30 @@ with col_janela:
 with col_hor:
     horizonte = st.slider("Horizonte (dias)", 7, 28, 25)
 
-incluir_atrasadas = st.checkbox(
-    "Incluir despesas atrasadas em aberto nas saídas (pagas hoje)", value=False,
-    help="Contas a pagar com vencimento anterior a hoje e ainda em aberto. Por padrão ficam fora do fluxo e "
-         "aparecem à parte, porque podem ser baixas ainda não feitas.")
+col_chk, col_custo, col_btn = st.columns([4, 2, 2], vertical_alignment="center")
+with col_chk:
+    incluir_atrasadas = st.checkbox(
+        "Incluir despesas atrasadas em aberto nas saídas (pagas hoje)", value=False,
+        help="Contas a pagar com vencimento anterior a hoje e ainda em aberto. Por padrão ficam fora do fluxo e "
+             "aparecem à parte, porque podem ser baixas ainda não feitas.")
+with col_custo:
+    custo_override = st.number_input(
+        "Custo de intermediação (% da receita)", min_value=0.0, max_value=100.0, value=None, step=1.0, format="%.1f",
+        placeholder="automático (medido na base)",
+        help="Vazio = usa o MAIOR percentual mensal medido na base nos meses fechados da janela: taxa de "
+             "intermediação (conta 3.3.1) ÷ receita de intermediação (conta 1.2.4). Preencha só para simular "
+             "outro percentual. "
+             "O custo entra nas saídas no mesmo dia da receita (o parceiro repassa só o líquido).")
+with col_btn:
+    if st.button("🔄 Atualizar agora", use_container_width=True,
+                 help="Busca os dados de novo no BigQuery e na API da Superlógica. O dashboard guarda os dados por "
+                      "20 horas; use o botão quando precisar do número do momento."):
+        atualizar_agora()
+        st.rerun()
 
 with st.spinner("Carregando boletos e intermediação..."):
-    df_bol = load_boletos_fluxo()
-    df_int = load_intermediacao_fluxo()
+    df_bol, ts_bol = load_boletos_fluxo()
+    df_int, ts_int = load_intermediacao_fluxo()
 
 if df_bol.empty or df_int.empty:
     no_data("Sem dados de boletos/intermediação para projetar.")
@@ -93,20 +151,38 @@ hoje = pd.Timestamp(date.today())
 res = fc.calcular_fluxo(df_bol, df_int, hoje, janela_meses=janela, horizonte_dias=horizonte)
 fluxo, curvas = res["fluxo"], res["curvas"]
 
+# ── Custo de intermediação: medido na base (3.3.1 ÷ 1.2.4), ou o valor digitado ──
+_ci = res["custo_interm"]
+if custo_override is not None:
+    custo_pct, custo_origem = float(custo_override), "valor digitado"
+elif _ci["razao"] is not None:
+    custo_pct = _ci["razao"] * 100
+    custo_origem = f"maior mês fechado da janela de {janela} meses: {_ci['mes_max'].strftime('%m/%Y')}"
+else:
+    custo_pct, custo_origem = 30.0, "premissa de 30% (sem histórico da conta 3.3.1 na janela)"
+
 # ── Despesas (API Superlógica) ────────────────
 cred = st.secrets.get("superlogica", {})
 desp = None
 if cred.get("app_token") and cred.get("access_token"):
     try:
         with st.spinner("Buscando contas a pagar na Superlógica..."):
-            df_desp = load_despesas_fluxo(cred["app_token"], cred["access_token"], hoje.strftime("%Y-%m-%d"))
+            df_desp, ts_desp = load_despesas_fluxo(cred["app_token"], cred["access_token"], hoje.strftime("%Y-%m-%d"))
         desp = fc.projetar_despesas(df_desp, fluxo.index, hoje, incluir_atrasadas)
     except Exception as e:  # API fora do ar / token inválido: segue só com as entradas
         st.warning(f"Não foi possível carregar as despesas da Superlógica: {e}")
 else:
     st.info("Despesas não carregadas: adicione `[superlogica]` com `app_token` e `access_token` nos secrets do app.")
 tem_desp = desp is not None
-fluxo["Saídas"] = desp["serie"] if tem_desp else 0.0
+_ts = {"Boletos": ts_bol, "Meios de pagamento": ts_int}
+if tem_desp:
+    _ts["Despesas (Superlógica)"] = ts_desp
+st.caption("Dados carregados em (horário de Brasília): "
+           + " · ".join(f"{k} {v:%d/%m %H:%M}" for k, v in _ts.items())
+           + " — o cache dura 20 h; use **Atualizar agora** para buscar de novo.")
+fluxo["Contas a pagar"] = desp["serie"] if tem_desp else 0.0
+fluxo["Custo de intermediação"] = fluxo["Meios de pagamento"] * custo_pct / 100.0
+fluxo["Saídas"] = fluxo["Contas a pagar"] + fluxo["Custo de intermediação"]
 fluxo["Resultado do dia"] = fluxo["Total"] - fluxo["Saídas"]
 
 if fluxo.empty:
@@ -135,11 +211,13 @@ fluxo["Saldo projetado"] = saldo_inicial + fluxo["Resultado do dia"].cumsum()
 
 # ── KPIs ──────────────────────────────────────
 st.subheader(f"Caixa previsto — {fluxo.index[0]:%d/%m} a {fluxo.index[-1]:%d/%m}")
-k1, k2, k3, k4, k5 = st.columns(5)
+with st.container(key="kpis_fluxo"):
+    k1, k2, k3, k4, k5 = st.columns(5)
 k1.metric("Entradas previstas", brl(fluxo["Total"].sum()),
           help="Mensalidade + Setup + Meios de pagamento.")
 k2.metric("Saídas previstas", brl(fluxo["Saídas"].sum()) if tem_desp else "—",
-          help="Contas a pagar em aberto (API Superlógica), no dia do vencimento (ou próximo dia útil).")
+          help="Contas a pagar em aberto (API Superlógica), no dia do vencimento (ou próximo dia útil), mais o "
+               "custo de intermediação sobre a receita de meios de pagamento.")
 k3.metric("Resultado do período", brl(fluxo["Resultado do dia"].sum()) if tem_desp else "—")
 k4.metric("Saldo final projetado", brl(fluxo["Saldo projetado"].iloc[-1]) if tem_desp else "—",
           help="Saldo inicial informado + entradas − saídas.")
@@ -152,6 +230,9 @@ if tem_desp:
 st.caption(
     f"Entradas: Mensalidade {brl(fluxo['Mensalidade'].sum())} · Setup {brl(fluxo['Setup'].sum())} · "
     f"Meios de pagamento {brl(fluxo['Meios de pagamento'].sum())}"
+    + (f"  |  Saídas: Contas a pagar {brl(fluxo['Contas a pagar'].sum())} · "
+       f"Custo de intermediação ({fmt_num(custo_pct, 1)}% dos meios de pagamento, {custo_origem}) {brl(fluxo['Custo de intermediação'].sum())}"
+       if tem_desp else "")
 )
 if tem_desp:
     for e in desp["excluidas"]:
@@ -176,8 +257,9 @@ for nome in ("Mensalidade", "Setup", "Meios de pagamento"):
     fig.add_bar(x=x, y=fluxo[nome], name=nome, marker_color=COR[nome], row=1, col=1,
                 hovertemplate="%{x}<br>" + nome + ": R$ %{y:,.2f}<extra></extra>")
 if tem_desp:
-    fig.add_bar(x=x, y=-fluxo["Saídas"], name="Saídas", marker_color=COR["Saídas"], row=1, col=1,
-                customdata=fluxo["Saídas"], hovertemplate="%{x}<br>Saídas: R$ %{customdata:,.2f}<extra></extra>")
+    for nome_s, cor_s in (("Contas a pagar", COR["Saídas"]), ("Custo de intermediação", COR["Custo de intermediação"])):
+        fig.add_bar(x=x, y=-fluxo[nome_s], name=nome_s, marker_color=cor_s, row=1, col=1,
+                    customdata=fluxo[nome_s], hovertemplate="%{x}<br>" + nome_s + ": R$ %{customdata:,.2f}<extra></extra>")
     linha_y, linha_nome = fluxo["Saldo projetado"], "Saldo projetado"
 else:
     linha_y, linha_nome = fluxo["Total"].cumsum(), "Entradas acumuladas"
@@ -195,6 +277,8 @@ st.plotly_chart(fig, use_container_width=True)
 # ── Tabela diária ─────────────────────────────
 with st.expander("Tabela diária", expanded=False):
     t = fluxo.drop(columns=["Acumulado"]).rename(columns={"Total": "Entradas", "já agendado": "Entradas já agendadas"})
+    t = t[["Mensalidade", "Setup", "Meios de pagamento", "Entradas", "Contas a pagar", "Custo de intermediação", "Saídas",
+           "Resultado do dia", "Saldo projetado", "Entradas já agendadas"]]
     t.insert(0, "Dia da semana", [DIAS_SEMANA[d.weekday()] for d in t.index])
     t = t.reset_index().rename(columns={"dia": "Data"})
     st.dataframe(br_style(t, {"Data": "data", **{c: "brl" for c in t.columns[2:]}}),
@@ -223,7 +307,7 @@ st.divider()
 st.subheader("Regra de recebimento aplicada")
 st.caption(
     "D0 = dia do vencimento (se cair em dia não útil, o próximo dia útil). D+n = n dias úteis depois do D0; "
-    "'Antes do D0' = crédito em conta antes do vencimento. Percentuais ponderados por valor (comp_valor), "
+    f"'Antes do D0' = crédito em conta antes do vencimento (D-20 a D-1); 'Não recebido' = parte que não entra até D+{fc.LAG_MAX}. Percentuais ponderados por valor (comp_valor), "
     f"aprendidos nos boletos dos últimos {janela} meses com cauda de {fc.LAG_MAX} dias úteis já completa."
 )
 
@@ -232,17 +316,17 @@ def caixa_regra(conta: str) -> None:
     c = curvas[conta]
     nome = fc.CONTAS[conta]
     r = fc.resumo_curva(c)
-    with st.container(border=True):
+    with st.container(border=True, key=f"regra_{conta.replace('.', '_')}"):
         st.markdown(f"**{nome}** — base de R$ {fmt_brl(c['base'])} · {fmt_int(c['n_boletos'])} boletos · "
                     f"vencimentos de {c['ini']:%d/%m/%Y} a {c['fim']:%d/%m/%Y}")
         linhas = [r.iloc[i:i + 7] for i in (0, 7)]
         for bloco in linhas:
-            cols = st.columns(len(bloco))
+            cols = st.columns(len(bloco), gap="small")
             for col, (_, row) in zip(cols, bloco.iterrows()):
                 col.metric(row["faixa"], f"{fmt_num(row['pct'] * 100, 1)}%")
         resto = r.iloc[14:]
         if len(resto):
-            cols = st.columns(len(resto))
+            cols = st.columns(len(resto), gap="small")
             for col, (_, row) in zip(cols, resto.iterrows()):
                 col.metric(row["faixa"], f"{fmt_num(row['pct'] * 100, 1)}%")
         lags = c["lags"]
@@ -263,14 +347,20 @@ with cB:
 
 # ── Meios de pagamento ────────────────────────
 perfil = res["perfil_interm"]
-with st.container(border=True):
+with st.container(border=True, key="regra_meios"):
     st.markdown(f"**Meios de pagamento (Intermediação)** — média diária dos últimos {janela} meses fechados, "
                 f"por dia do mês (R$ por dia corrido). Fim de semana e feriado acumulam no próximo dia útil. "
-                f"Dados até {res['interm_ate']:%d/%m} (a tabela chega com defasagem).")
+                f"Dados até {res['interm_ate']:%d/%m} (a tabela chega com defasagem). "
+                f"Esta é a **receita bruta** (o parceiro repassa só o líquido, mas a gestão lança bruto e custo); "
+                f"o custo de {fmt_num(custo_pct, 1)}% ({custo_origem}) entra nas saídas (barra amarela).")
     faixas = [("Dias 1–5", 1, 5), ("Dias 6–10", 6, 10), ("Dias 11–20", 11, 20), ("Dias 21–31", 21, 31)]
     cols = st.columns(len(faixas))
     for col, (nome, a, b) in zip(cols, faixas):
         col.metric(nome, f"{brl(perfil.loc[a:b].mean())}/dia")
+    if _ci["razao"] is not None:
+        _meses = " · ".join(f"{m.strftime('%m/%Y')}: {fmt_num(v * 100, 1)}%" for m, v in _ci["por_mes"].items())
+        st.caption(f"Custo de intermediação (taxa 3.3.1 ÷ receita 1.2.4) por mês fechado: {_meses}. "
+                   f"Usado o **maior: {fmt_num(_ci['razao'] * 100, 1)}%** ({_ci['mes_max'].strftime('%m/%Y')}).")
     f3 = go.Figure(go.Bar(x=[str(i) for i in perfil.index], y=perfil.values, marker_color=COR["Meios de pagamento"],
                           hovertemplate="Dia %{x}: R$ %{y:,.0f}<extra></extra>"))
     f3.update_layout(yaxis=dict(tickprefix="R$ ", tickformat=",.0f"))
@@ -289,6 +379,7 @@ with st.expander("Premissas e limitações"):
 - **Créditos já agendados** (cliente pagou, crédito em data futura) entram como certeza, sem probabilidade.
 - **Dias sem recebimento:** fins de semana, feriados nacionais (biblioteca `holidays`), Carnaval e Corpus Christi.
 - **Não incluído nas entradas:** Acordos (1.2.13), Plano Anual (1.2.16), 1.2.20, 1.3.x e boletos ainda não gerados.
+- **Custo de intermediação:** o parceiro repassa só o líquido; a base lança a receita bruta (conta 1.2.4) e a taxa (conta 3.3.1, negativa) na mesma cobrança e no mesmo dia. O fluxo mostra a receita bruta nas entradas e o custo nas saídas, no mesmo dia. Percentual usado: {fmt_num(custo_pct, 1)}% ({custo_origem}) — o maior dos meses fechados, não a média, para não subestimar o custo; a taxa só existe na base a partir de abr/2026. Não duplica o contas a pagar (lá há só ~R$ 1–5 mil/mês de taxas Safe2Pay/Iugu).
 - **Saídas:** contas a pagar em aberto (`fl_status_mov = 0`) da API Superlógica (`/v2/financeiro/caixa`), sem curva — valem o vencimento e o valor exatos; vencimento em dia não útil paga no próximo dia útil. Transferências entre contas ficam fora. Busca de 9 meses atrás a 60 dias à frente (a API estoura a memória em janelas maiores).
 - **Exclusões por regra:** parcelas da Eduzz ("Parcela N de M", vencimento até 31/12/2026) ficam fora porque foi negociado não pagá-las em 2026 — regra em `EXCLUSOES_DESPESAS` (`utils/fluxo_calc.py`); some sozinha quando o contas a pagar remover os itens.
 - **Despesas atrasadas** (vencimento < hoje e ainda em aberto) ficam fora por padrão e são mostradas à parte, porque podem ser baixas não feitas.

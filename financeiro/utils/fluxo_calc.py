@@ -47,14 +47,24 @@ GROUP BY 1, 2
 """
 
 SQL_INTERM = """
-SELECT receb, SUM(comp_valor) AS valor
+-- Receita bruta de intermediação (1.2.4) e a taxa de intermediação (3.3.1, valor negativo) lançada na MESMA
+-- cobrança e no mesmo dia: o parceiro só transfere o líquido (vl_total_recb), a gestão lança bruto e custo.
+SELECT receb,
+       SUM(IF(conta = '1.2.4', comp_valor, 0))  AS valor,   -- receita bruta
+       SUM(IF(conta = '3.3.1', -comp_valor, 0)) AS custo    -- taxa (positiva)
 FROM (
-  SELECT DISTINCT id_recebimento_recb, comp_id_composicao_comp,
+  SELECT DISTINCT id_recebimento_recb, comp_id_composicao_comp, comp_st_conta_cont AS conta,
          CAST(dt_recebimento_recb AS DATE) AS receb, comp_valor
   FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
-  WHERE comp_st_conta_cont = '1.2.4'
+  WHERE comp_st_conta_cont IN ('1.2.4', '3.3.1')
     AND dt_recebimento_recb IS NOT NULL
     AND CAST(dt_recebimento_recb AS DATE) >= DATE_SUB(CURRENT_DATE(), INTERVAL 9 MONTH)
+    AND id_recebimento_recb IN (
+      SELECT DISTINCT id_recebimento_recb
+      FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
+      WHERE comp_st_conta_cont = '1.2.4'
+        AND CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(CURRENT_DATE(), INTERVAL 10 MONTH)
+    )
 )
 GROUP BY 1
 ORDER BY 1
@@ -173,10 +183,10 @@ def resumo_curva(c: dict) -> pd.DataFrame:
     """Faixas para a caixa de regra: antes de D0, D0, D+1... D+7, cauda e nunca."""
     p, lags = c["p"], c["lags"]
     at = lambda a, b: float(p[(lags >= a) & (lags <= b)].sum())
-    linhas = [("Antes do D0 (D-20 a D-1)", at(LAG_MIN, -1))]
+    linhas = [("Antes do D0", at(LAG_MIN, -1))]
     linhas += [("D0" if k == 0 else f"D+{k}", at(k, k)) for k in range(0, 8)]
     linhas += [("D+8 a D+14", at(8, 14)), ("D+15 a D+21", at(15, 21)), (f"D+22 a D+{LAG_MAX}", at(22, LAG_MAX)),
-               (f"Não recebido em D+{LAG_MAX}", c["nunca"])]
+               ("Não recebido", c["nunca"])]
     return pd.DataFrame(linhas, columns=["faixa", "pct"])
 
 
@@ -264,6 +274,27 @@ def perfil_intermediacao(interm: pd.DataFrame, as_of: pd.Timestamp, janela_meses
     if sel.empty:
         return pd.Series(0.0, index=range(1, 32))
     return sel.groupby(sel.index.day).mean().reindex(range(1, 32)).fillna(0.0)
+
+
+def razao_custo_intermediacao(interm: pd.DataFrame, as_of: pd.Timestamp, janela_meses: int) -> dict:
+    """Custo (3.3.1) / receita bruta (1.2.4) por mês fechado da janela; usa o MAIOR mês (decisão do Davi).
+
+    Só entram os dias em que a taxa foi lançada (antes de abr/2026 não existia a linha 3.3.1 e os valores
+    provavelmente já vinham líquidos). Meses fechados = os `janela_meses` meses anteriores ao de as_of.
+    """
+    d = interm.assign(receb=pd.to_datetime(interm["receb"]))
+    m_fim = as_of.to_period("M")
+    per = d["receb"].dt.to_period("M")
+    d = d[(per >= m_fim - janela_meses) & (per < m_fim) & (d["custo"] > 0)].copy()
+    d["mes"] = d["receb"].dt.to_period("M")
+    g = d.groupby("mes")[["custo", "valor"]].sum()
+    g = g[g["valor"] > 0]
+    por_mes = (g["custo"] / g["valor"]).sort_index()
+    if por_mes.empty:
+        return {"razao": None, "mes_max": None, "por_mes": {}, "dias": 0, "custo": 0.0, "receita": 0.0}
+    mes_max = por_mes.idxmax()
+    return {"razao": float(por_mes.max()), "mes_max": mes_max, "por_mes": {m: float(v) for m, v in por_mes.items()},
+            "dias": int(len(d)), "custo": float(g["custo"].sum()), "receita": float(g["valor"].sum())}
 
 
 def projetar_intermediacao(perfil: pd.Series, dias: pd.DatetimeIndex) -> pd.Series:
@@ -361,5 +392,6 @@ def calcular_fluxo(df_boletos: pd.DataFrame, df_interm: pd.DataFrame, hoje: pd.T
     fluxo = fluxo[fluxo.index >= hoje].copy()          # mostra de hoje em diante
     fluxo["Acumulado"] = fluxo["Total"].cumsum()
     fluxo.index.name = "dia"
-    return {"fluxo": fluxo, "curvas": curvas, "perfil_interm": perfil, "as_of": as_of, "interm_ate": interm_ate, "fim": fim,
+    return {"fluxo": fluxo, "curvas": curvas, "perfil_interm": perfil,
+            "custo_interm": razao_custo_intermediacao(i2, interm_ate, janela_meses), "as_of": as_of, "interm_ate": interm_ate, "fim": fim,
             "boletos_abertos": b[b["receb"].isna()]}
