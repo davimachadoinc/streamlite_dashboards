@@ -13,12 +13,14 @@ Pegadinhas confirmadas na prática (2026-10-21):
     -> buscar em blocos mensais.
 """
 import json
+import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
+_CARREGADO_EM = time.time()   # usado pela página para detectar versão antiga em memória após um deploy
 URL = "https://api.superlogica.net/v2/financeiro/caixa"
 COLS = ["id_contabanco_mov", "venc", "venc_orig", "valor", "fornecedor", "historico", "categoria",
         "forma_pagamento", "centro_custo"]

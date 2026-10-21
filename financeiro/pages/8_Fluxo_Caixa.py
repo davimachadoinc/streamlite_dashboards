@@ -10,7 +10,9 @@ Regra de recebimento (D0 = dia do vencimento, D+n = n dias ÚTEIS depois; D-n = 
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from datetime import date, datetime, timedelta
+import importlib
+import os
+from datetime import date, datetime, timedelta, timezone
 
 st.set_page_config(page_title="Fluxo de Caixa | InChurch", page_icon="💵", layout="wide")
 
@@ -24,7 +26,7 @@ from utils.style import inject_css
 from plotly.subplots import make_subplots
 from utils.data import PALETTE, br_style, chart_layout, fmt_brl, fmt_num, fmt_int, no_data, _bq_query
 from utils import fluxo_calc as fc
-from utils.superlogica import buscar_despesas_abertas
+from utils import superlogica as sl
 
 inject_css()
 
@@ -64,7 +66,7 @@ CACHE_TTL = 72000  # padrão do dashboard: 20 h. O botão "Atualizar agora" limp
 
 
 def _agora_brasilia() -> datetime:
-    return datetime.utcnow() - timedelta(hours=3)   # Brasília sem horário de verão
+    return datetime.now(timezone(timedelta(hours=-3))).replace(tzinfo=None)   # Brasília (sem horário de verão)
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -80,7 +82,7 @@ def load_intermediacao_fluxo() -> tuple:
 @st.cache_data(ttl=CACHE_TTL)
 def load_despesas_fluxo(_app_token: str, _access_token: str, dia: str) -> tuple:
     """`dia` só invalida o cache na virada do dia (os tokens ficam fora da chave de cache)."""
-    return buscar_despesas_abertas(_app_token, _access_token, pd.Timestamp(dia)), _agora_brasilia()
+    return sl.buscar_despesas_abertas(_app_token, _access_token, pd.Timestamp(dia)), _agora_brasilia()
 
 
 def atualizar_agora() -> None:
@@ -138,6 +140,23 @@ with col_btn:
                       "20 horas; use o botão quando precisar do número do momento."):
         atualizar_agora()
         st.rerun()
+
+def garantir_modulos_atualizados() -> None:
+    """Depois de um deploy o Streamlit recarrega esta página mas pode manter em memória a versão ANTIGA dos módulos
+    utils (erro típico: KeyError por uma chave nova). Se o arquivo mudou depois de importado, recarrega e limpa o cache."""
+    recarregou = False
+    for mod in (fc, sl):
+        try:
+            if os.path.getmtime(mod.__file__) > getattr(mod, "_CARREGADO_EM", 0):
+                importlib.reload(mod)
+                recarregou = True
+        except OSError:
+            pass
+    if recarregou:
+        atualizar_agora()
+
+
+garantir_modulos_atualizados()
 
 with st.spinner("Carregando boletos e intermediação..."):
     df_bol, ts_bol = load_boletos_fluxo()

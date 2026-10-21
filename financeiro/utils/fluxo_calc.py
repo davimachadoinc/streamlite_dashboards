@@ -15,6 +15,7 @@ Meios de pagamento (Intermediação 1.2.4):
   desde o dia útil anterior), tira-se a média por dia do mês nos N meses fechados e re-acumula
   no próximo dia útil.
 """
+import time
 from datetime import timedelta
 
 import numpy as np
@@ -22,6 +23,7 @@ import pandas as pd
 import holidays
 from dateutil.easter import easter
 
+_CARREGADO_EM = time.time()   # usado pela página para detectar versão antiga em memória após um deploy
 LAG_MIN, LAG_MAX = -20, 30
 CONTAS = {"1.2.2": "Mensalidade", "1.2.1": "Setup"}
 CGADB_ID = "6648"  # fora da curva e fora do fluxo (decisão do Davi, 2026-10-21)
