@@ -112,6 +112,14 @@ def parse_brl(txt: str) -> float | None:
     return -v if neg else v
 
 
+# ── Menu lateral (embaixo): incluir CGADB ─────
+with st.sidebar:
+    st.divider()
+    incluir_cgadb = st.toggle(
+        "Incluir CGADB nas análises", value=False, key="fluxo_incluir_cgadb",
+        help="Por padrão a CGADB (id 6648) fica fora da curva e do fluxo: o boleto mensal de ~R$ 322 mil fica "
+             "sistematicamente em aberto e distorce a curva de recebimento. Ligue para ver o cenário com ela.")
+
 # ── Header ────────────────────────────────────
 col_title, col_janela, col_hor = st.columns([6, 2, 2], vertical_alignment="bottom")
 with col_title:
@@ -127,10 +135,6 @@ with col_chk:
         "Incluir despesas atrasadas em aberto nas saídas (pagas hoje)", value=False,
         help="Contas a pagar com vencimento anterior a hoje e ainda em aberto. Por padrão ficam fora do fluxo e "
              "aparecem à parte, porque podem ser baixas ainda não feitas.")
-    incluir_cgadb = st.toggle(
-        "Incluir CGADB nas análises", value=False, key="fluxo_incluir_cgadb",
-        help="Por padrão a CGADB (id 6648) fica fora da curva e do fluxo: o boleto mensal de ~R$ 322 mil fica "
-             "sistematicamente em aberto e distorce a curva de recebimento. Ligue para ver o cenário com ela.")
 with col_custo:
     custo_override = st.number_input(
         "Custo de intermediação (% da receita)", min_value=0.0, max_value=100.0, value=None, step=1.0, format="%.1f",
@@ -402,7 +406,7 @@ with st.expander("Premissas e limitações"):
         f"""
 - **Fonte:** `splgc-cobrancas_competencia-all` (contas 1.2.2 Mensalidade, 1.2.1 Setup e 1.2.4 Intermediação), deduplicada.
   Data de caixa = `dt_recebimento_recb`. Os boletos são gerados com ~28 dias de antecedência, por isso o horizonte máximo é 28 dias.
-- **CGADB (id 6648) fica fora** da curva e do fluxo por padrão (boleto mensal de ~R$ 322 mil sistematicamente em aberto). Use o botão **Incluir CGADB nas análises** no topo da página para ver o cenário com ela.
+- **CGADB (id 6648) fica fora** da curva e do fluxo por padrão (boleto mensal de ~R$ 322 mil sistematicamente em aberto). Use o botão **Incluir CGADB nas análises** no menu lateral (embaixo) para ver o cenário com ela.
 - **Boleto em aberto:** probabilidade de crédito em cada dia = curva do cliente pagando (D0+m) combinada com o intervalo
   pagamento→crédito (92% em exatamente 2 dias úteis, 5% no mesmo dia, ~2% cartão com 20+ dias), **condicionada a ainda não ter pago**.
   Assim um boleto que vence no dia 10 já contribui para o caixa do dia 05.
