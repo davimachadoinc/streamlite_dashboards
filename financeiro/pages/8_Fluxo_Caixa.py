@@ -3,7 +3,7 @@ pages/8_Fluxo_Caixa.py
 Fluxo de Caixa projetado — Mensalidade + Setup (boletos) + Meios de pagamento (Intermediação).
 
 Regra de recebimento (D0 = dia do vencimento, D+n = n dias ÚTEIS depois; D-n = crédito antes do vencimento):
-  a curva de crédito de cada categoria é aprendida nos boletos dos últimos N meses (CGADB fora) e
+  a curva de crédito de cada categoria é aprendida nos boletos dos últimos N meses (CGADB fora por padrão) e
   aplicada aos boletos em aberto, condicionada a "ainda não pago". Créditos já agendados na tabela
   entram como certeza. Sem recebimento em fim de semana/feriado. Motor: utils/fluxo_calc.py.
 """
@@ -71,7 +71,8 @@ def _agora_brasilia() -> datetime:
 
 @st.cache_data(ttl=CACHE_TTL)
 def load_boletos_fluxo() -> tuple:
-    return _bq_query(fc.SQL_BOLETOS, "bigquery_bi"), _agora_brasilia()
+    # excluir_cgadb=False: aqui o filtro é feito na página, pelo botão "Incluir CGADB nas análises"
+    return _bq_query(fc.SQL_BOLETOS, "bigquery_bi", excluir_cgadb=False), _agora_brasilia()
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -126,6 +127,10 @@ with col_chk:
         "Incluir despesas atrasadas em aberto nas saídas (pagas hoje)", value=False,
         help="Contas a pagar com vencimento anterior a hoje e ainda em aberto. Por padrão ficam fora do fluxo e "
              "aparecem à parte, porque podem ser baixas ainda não feitas.")
+    incluir_cgadb = st.toggle(
+        "Incluir CGADB nas análises", value=False, key="fluxo_incluir_cgadb",
+        help="Por padrão a CGADB (id 6648) fica fora da curva e do fluxo: o boleto mensal de ~R$ 322 mil fica "
+             "sistematicamente em aberto e distorce a curva de recebimento. Ligue para ver o cenário com ela.")
 with col_custo:
     custo_override = st.number_input(
         "Custo de intermediação (% da receita)", min_value=0.0, max_value=100.0, value=None, step=1.0, format="%.1f",
@@ -165,6 +170,12 @@ with st.spinner("Carregando boletos e intermediação..."):
 if df_bol.empty or df_int.empty:
     no_data("Sem dados de boletos/intermediação para projetar.")
     st.stop()
+
+if not incluir_cgadb:
+    df_bol = df_bol[df_bol["sacado"] != fc.CGADB_ID]
+    if df_bol.empty:
+        no_data("Sem dados de boletos para projetar.")
+        st.stop()
 
 hoje = pd.Timestamp(date.today())
 res = fc.calcular_fluxo(df_bol, df_int, hoje, janela_meses=janela, horizonte_dias=horizonte)
@@ -391,7 +402,7 @@ with st.expander("Premissas e limitações"):
         f"""
 - **Fonte:** `splgc-cobrancas_competencia-all` (contas 1.2.2 Mensalidade, 1.2.1 Setup e 1.2.4 Intermediação), deduplicada.
   Data de caixa = `dt_recebimento_recb`. Os boletos são gerados com ~28 dias de antecedência, por isso o horizonte máximo é 28 dias.
-- **CGADB (id 6648) fica fora** da curva e do fluxo (boleto mensal de ~R$ 322 mil sistematicamente em aberto).
+- **CGADB (id 6648) fica fora** da curva e do fluxo por padrão (boleto mensal de ~R$ 322 mil sistematicamente em aberto). Use o botão **Incluir CGADB nas análises** no topo da página para ver o cenário com ela.
 - **Boleto em aberto:** probabilidade de crédito em cada dia = curva do cliente pagando (D0+m) combinada com o intervalo
   pagamento→crédito (92% em exatamente 2 dias úteis, 5% no mesmo dia, ~2% cartão com 20+ dias), **condicionada a ainda não ter pago**.
   Assim um boleto que vence no dia 10 já contribui para o caixa do dia 05.

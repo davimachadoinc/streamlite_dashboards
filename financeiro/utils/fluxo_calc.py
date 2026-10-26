@@ -26,12 +26,13 @@ from dateutil.easter import easter
 _CARREGADO_EM = time.time()   # usado pela página para detectar versão antiga em memória após um deploy
 LAG_MIN, LAG_MAX = -20, 30
 CONTAS = {"1.2.2": "Mensalidade", "1.2.1": "Setup"}
-CGADB_ID = "6648"  # fora da curva e fora do fluxo (decisão do Davi, 2026-10-21)
+CGADB_ID = "6648"  # fora da curva e fora do fluxo por padrão (decisão do Davi, 2026-10-21); botão na página inclui
 
-SQL_BOLETOS = f"""
+SQL_BOLETOS = """
 WITH x AS (
   SELECT DISTINCT
     id_recebimento_recb, comp_id_composicao_comp,
+    CAST(id_sacado_sac AS STRING) AS sacado,
     comp_st_conta_cont AS conta,
     CAST(dt_vencimento_recb AS DATE)  AS venc,
     CAST(dt_recebimento_recb AS DATE) AS receb,
@@ -39,13 +40,12 @@ WITH x AS (
     comp_valor
   FROM `business-intelligence-467516.Splgc.splgc-cobrancas_competencia-all`
   WHERE comp_st_conta_cont IN ('1.2.1', '1.2.2')
-    AND id_sacado_sac != '{CGADB_ID}'
     AND comp_valor > 0
     AND CAST(dt_vencimento_recb AS DATE) >= DATE_SUB(CURRENT_DATE(), INTERVAL 9 MONTH)
 )
-SELECT id_recebimento_recb, conta, MIN(venc) AS venc, MAX(receb) AS receb, MAX(liq) AS liq, SUM(comp_valor) AS valor
+SELECT id_recebimento_recb, sacado, conta, MIN(venc) AS venc, MAX(receb) AS receb, MAX(liq) AS liq, SUM(comp_valor) AS valor
 FROM x
-GROUP BY 1, 2
+GROUP BY 1, 2, 3
 """
 
 SQL_INTERM = """

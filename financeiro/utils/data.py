@@ -5,6 +5,7 @@ Helpers de dados, cache, paleta de cores e layout de gráficos.
 from __future__ import annotations
 
 import json
+import re
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
@@ -451,7 +452,32 @@ def _bq_client_bi() -> bigquery.Client:
     return _get_bq_client("bigquery_bi")
 
 
-def _bq_query(query: str, project_key: str = "bigquery_tech") -> pd.DataFrame:
+# CGADB (id_sacado_sac 6648) fica fora de TODAS as análises (decisão do Davi, 2026-10-26): boleto mensal de
+# ~R$ 322 mil sistematicamente em aberto que distorce inadimplência, receita, MRR e churn. Em vez de editar
+# cada query, toda referência às tabelas Splgc com id_sacado_sac é trocada por um subselect sem a CGADB.
+# O filtro é por id_sacado_sac (o st_sincro_sac da CGADB é vazio e colide com outros clientes).
+CGADB_ID = "6648"
+_TABELAS_COM_SACADO = (
+    "splgc-cobrancas_competencia-all", "splgc-cobrancas_competencia-hist", "splgc-cobrancas_liquidacao-all",
+    "splgc-clientes-inchurch", "splgc-grupo", "splgc-tabela_mrr",
+    "vw-splgc-tabela_mrr_validos", "vw-splgc-tabela_mrr_e_descricao",
+)
+_RE_TABELA_SACADO = re.compile(
+    r"`(business-intelligence-467516\.Splgc\.(?:" + "|".join(re.escape(t) for t in _TABELAS_COM_SACADO) + r"))`"
+)
+
+
+def _sem_cgadb(query: str) -> str:
+    return _RE_TABELA_SACADO.sub(
+        lambda m: f"(SELECT * FROM `{m.group(1)}` WHERE IFNULL(CAST(id_sacado_sac AS STRING), '') != '{CGADB_ID}')",
+        query,
+    )
+
+
+def _bq_query(query: str, project_key: str = "bigquery_tech", excluir_cgadb: bool = True) -> pd.DataFrame:
+    """excluir_cgadb=False só para páginas com botão próprio de inclusão (ex.: Fluxo de Caixa)."""
+    if excluir_cgadb and project_key == "bigquery_bi":
+        query = _sem_cgadb(query)
     try:
         client = _bq_client_tech() if project_key == "bigquery_tech" else _bq_client_bi()
         return client.query(query).to_dataframe()
