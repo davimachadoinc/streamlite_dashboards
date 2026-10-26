@@ -100,11 +100,10 @@ def load_igrejas() -> pd.DataFrame:
     return _query(sql)
 
 
-def filtrar_codigo(df: pd.DataFrame, termo: str) -> pd.DataFrame:
-    """Filtra por 'contém' no Código Local (cod_local) ou Código de Denominação (cod_denominacao)."""
-    termo = (termo or "").strip()
-    if not termo:
-        return df
-    loc = df["cod_local"].astype("string").str.contains(termo, regex=False, na=False)
-    den = df["cod_denominacao"].astype("string").str.contains(termo, regex=False, na=False)
-    return df[loc | den]
+def filtrar_codigos(df: pd.DataFrame, cod_local: str, cod_denominacao: str) -> pd.DataFrame:
+    """Filtra por 'contém' em cod_local e/ou cod_denominacao (os dois, quando ambos preenchidos)."""
+    for col, termo in (("cod_local", cod_local), ("cod_denominacao", cod_denominacao)):
+        termo = (termo or "").strip()
+        if termo:
+            df = df[df[col].astype("string").str.contains(termo, regex=False, na=False)]
+    return df

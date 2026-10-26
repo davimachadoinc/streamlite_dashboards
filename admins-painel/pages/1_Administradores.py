@@ -11,7 +11,7 @@ if not st.user.is_logged_in:
     st.stop()
 
 from utils.style import inject_css
-from utils.data import load_admins, load_igrejas, filtrar_codigo
+from utils.data import load_admins, load_igrejas, filtrar_codigos
 
 inject_css()
 
@@ -35,12 +35,13 @@ with st.spinner("Carregando dados..."):
 
 admins = admins.merge(igrejas[["cod_local", "igreja"]].drop_duplicates("cod_local"), on="cod_local", how="left")
 
-c1, c2 = st.columns([2, 3])
-termo = c1.text_input("Código Local ou Denominação", placeholder="Ex.: 32187", key="filtro_codigo")
+c1, c2, c3 = st.columns([1, 1, 2])
+cod_local = c1.text_input("Código Local", placeholder="Ex.: 32187", key="filtro_local")
+cod_denom = c2.text_input("Código de Denominação", placeholder="Ex.: 3987", key="filtro_denom")
 niveis = sorted(admins["nivel"].dropna().unique())
-sel = c2.multiselect("Nível de acesso", niveis, placeholder="Todos")
+sel = c3.multiselect("Nível de acesso", niveis, placeholder="Todos")
 
-df = filtrar_codigo(admins, termo)
+df = filtrar_codigos(admins, cod_local, cod_denom)
 if sel:
     df = df[df["nivel"].isin(sel)]
 df = df.sort_values("ultimo_login", ascending=False, na_position="last")

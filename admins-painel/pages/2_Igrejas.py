@@ -11,7 +11,7 @@ if not st.user.is_logged_in:
     st.stop()
 
 from utils.style import inject_css
-from utils.data import load_admins, load_igrejas, load_logins_por_igreja, filtrar_codigo
+from utils.data import load_admins, load_igrejas, load_logins_por_igreja, filtrar_codigos
 
 inject_css()
 
@@ -44,8 +44,10 @@ ig["situacao"] = ig.apply(
     lambda r: "Bloqueada" if r["bloqueada"] else ("Ativa" if r["ativa"] else "Inativa"), axis=1
 )
 
-termo = st.text_input("Código Local ou Denominação", placeholder="Ex.: 32187", key="filtro_codigo_igrejas")
-ig = filtrar_codigo(ig, termo).sort_values("ultimo_login", ascending=False, na_position="last")
+c1, c2, _ = st.columns([1, 1, 2])
+cod_local = c1.text_input("Código Local", placeholder="Ex.: 32187", key="filtro_local_igrejas")
+cod_denom = c2.text_input("Código de Denominação", placeholder="Ex.: 3987", key="filtro_denom_igrejas")
+ig = filtrar_codigos(ig, cod_local, cod_denom).sort_values("ultimo_login", ascending=False, na_position="last")
 
 evento = st.dataframe(
     ig[["cod_local", "igreja", "denominacao", "cod_denominacao", "situacao", "ultimo_login", "usuarios"]],
