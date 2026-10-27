@@ -4,6 +4,7 @@ Administradores do Painel de Controle — autenticação Google OIDC (st.login /
 """
 import streamlit as st
 from utils.style import inject_css
+from utils.auth import check_allowed
 
 st.set_page_config(
     page_title="Admins do Painel | InChurch",
@@ -13,11 +14,6 @@ st.set_page_config(
 )
 
 inject_css()
-
-
-def check_allowed(email: str) -> bool:
-    allowed = st.secrets.get("app_config", {}).get("allowed_emails", [])
-    return email in allowed
 
 
 if not st.user.is_logged_in:

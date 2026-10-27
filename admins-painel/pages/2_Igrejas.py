@@ -6,9 +6,9 @@ import streamlit as st
 
 st.set_page_config(page_title="Igrejas | Admins do Painel", page_icon="🛡️", layout="wide")
 
-if not st.user.is_logged_in:
-    st.error("⛔ Acesso não autorizado. Faça login na página inicial.")
-    st.stop()
+from utils.auth import require_access
+
+require_access()
 
 from utils.style import inject_css
 from utils.data import load_admins, load_igrejas, load_logins_por_igreja, filtrar_codigos
@@ -22,7 +22,8 @@ with st.sidebar:
         st.rerun()
     st.caption(
         "Lista todas as igrejas locais (ativas ou não), da que logou mais recentemente no painel "
-        "para a mais antiga. Igrejas sem nenhum login ficam no fim.\n\n"
+        "para a mais antiga. Igrejas sem nenhum login ficam no fim. Só contam **administradores** "
+        "(Admin, Admin de equipe, Regional e Membro de equipe com registro em `view_admin_access`).\n\n"
         "Clique numa linha para ver quem logou naquela igreja."
     )
 
@@ -32,6 +33,9 @@ with st.spinner("Carregando dados..."):
     igrejas = load_igrejas()
     logins = load_logins_por_igreja()
     admins = load_admins()
+
+# só administradores (regra em load_admins): quem logou no painel mas não é administrador fica de fora
+logins = logins[logins["usuario_id"].isin(admins["usuario_id"])]
 
 resumo = (
     logins.groupby("cod_local")
@@ -79,16 +83,17 @@ st.markdown(
 )
 
 det = logins[logins["cod_local"] == sel["cod_local"]].merge(
-    admins[["usuario_id", "nome", "email", "nivel"]], on="usuario_id", how="left"
+    admins[["usuario_id", "nome", "email", "tipo", "nivel"]], on="usuario_id", how="left"
 )
 det = det.sort_values("ultimo_login", ascending=False)
 st.dataframe(
-    det[["nome", "email", "nivel", "ultimo_login", "qtd_logins"]],
+    det[["nome", "email", "tipo", "nivel", "ultimo_login", "qtd_logins"]],
     use_container_width=True,
     hide_index=True,
     column_config={
         "nome": "Nome",
         "email": "E-mail",
+        "tipo": "Tipo",
         "nivel": "Nível de acesso",
         "ultimo_login": st.column_config.DateColumn("Último login no painel", format="DD/MM/YYYY"),
         "qtd_logins": st.column_config.NumberColumn("Dias com login", format="%d"),

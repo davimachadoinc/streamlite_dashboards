@@ -39,9 +39,23 @@ def _query(sql: str) -> pd.DataFrame:
     return _bq_client().query(sql).to_dataframe(create_bqstorage_client=False)
 
 
+TIPOS = {
+    "inchurch_admin": "Admin",
+    "inchurch_team_admin": "Admin de equipe",
+    "inchurch_region": "Regional",
+    "inchurch_team_member": "Membro de equipe",
+}
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_admins() -> pd.DataFrame:
-    """Um registro por usuário com acesso ao painel (view_admin_access), com último login no painel."""
+    """
+    Administradores do painel de controle, um registro por usuário.
+
+    Regra (view_basicuser.user_type): inchurch_admin, inchurch_team_admin e inchurch_region são
+    administradores por si só; inchurch_team_member só conta se tiver registro em view_admin_access.
+    Demais tipos (ex.: inradar_user, usuário comum do app) ficam de fora.
+    """
     sql = f"""
     WITH acesso AS (
       SELECT basic_user_id,
@@ -56,20 +70,28 @@ def load_admins() -> pd.DataFrame:
       WHERE LOWER(channel) IN {CANAIS_PAINEL}
       GROUP BY basic_user_id
     )
-    SELECT u.basicuser_id AS usuario_id,
+    SELECT b.id AS usuario_id,
            TRIM(CONCAT(IFNULL(u.first_name, ''), ' ', IFNULL(u.last_name, ''))) AS nome,
            u.email,
-           u.tertiarygroup_id AS cod_local,
-           u.subgroup_id AS cod_denominacao,
+           b.user_type AS tipo,
+           b.tertiarygroup_id AS cod_local,
+           b.subgroup_id AS cod_denominacao,
            a.nivel, a.nivel_rank,
+           b.created_at AS criado_em,
            l.ultimo_login
-    FROM acesso a
-    JOIN {DS}.view_user_info u ON u.basicuser_id = a.basic_user_id
-    LEFT JOIN login l ON l.basic_user_id = a.basic_user_id
+    FROM {DS}.view_basicuser b
+    LEFT JOIN {DS}.view_user_info u ON u.basicuser_id = b.id
+    LEFT JOIN acesso a ON a.basic_user_id = b.id
+    LEFT JOIN login l ON l.basic_user_id = b.id
+    WHERE b.user_type IN ('inchurch_admin', 'inchurch_team_admin', 'inchurch_region')
+       OR (b.user_type = 'inchurch_team_member' AND a.basic_user_id IS NOT NULL)
     """
     df = _query(sql)
-    df["nivel"] = df["nivel"].map(NIVEIS).fillna(df["nivel"])
+    df["nivel"] = df["nivel"].map(NIVEIS).fillna(df["nivel"]).fillna("—")
+    df["tipo"] = df["tipo"].map(TIPOS).fillna(df["tipo"])
     df["ultimo_login"] = pd.to_datetime(df["ultimo_login"])
+    # created_at vem em UTC; exibir em horário de Brasília
+    df["criado_em"] = pd.to_datetime(df["criado_em"], utc=True).dt.tz_convert("America/Sao_Paulo").dt.tz_localize(None)
     return df
 
 
